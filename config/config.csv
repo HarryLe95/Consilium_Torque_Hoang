@@ -1,0 +1,14 @@
+KEY,VALUE,TYPE
+application_name,'Sandbox Test Examples',str
+cfg_file_info,"{'connection_type' : 'file', 'path' : 'C:/Sandbox/config', 'file' : 'config.csv'}",dict
+cfg_file_sql,None,str
+cfg_file_kwargs,"{}",dict
+cfg_s3_info,"{'connection_type' : 's3', 'user'   : None, 'region' : 'ap-southeast-2', 'bucket' : 'aa-trq-model-2-task0370756-poc-syd-174396275689'}",dict
+cfg_s3_sql,None,str
+cfg_s3_kwargs,"{'file' : 'config.csv'}",dict
+
+
+                
+                
+                
+

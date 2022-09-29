@@ -1,0 +1,16 @@
+pytest
+pytest-cov
+pandas
+matplotlib
+Pillow
+plotly
+ipykernel>=6.9.1
+opencv-python>=4.5.5.62
+albumentations>=1.1.0
+keras
+tensorflow
+pyyaml
+tiler
+geopy
+boto3
+sqlalchemy
