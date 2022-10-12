@@ -1,8 +1,6 @@
 import pandas as pd 
 import numpy as np 
-
-data_from_folder='brett_extract_from_s3'
-output_save_folder='att2_new_extracts'
+from src.utils.PathManager import Paths as Path  
 
 def generate_labels(well_id, 
                     feat, 
@@ -16,7 +14,7 @@ def generate_labels(well_id,
                     diff_compare_window=60,
                     ramp_integral_threshold=0.7):
     print(well_id)
-    tag_df=pd.read_pickle(f'/home/ec2-user/SageMaker/efs/data/{data_from_folder}/limited_tag_{well_id}.pkl')
+    tag_df=pd.read_pickle(Path.data(f"{well_id}_2016-01-01_2023-01-01_raw.pkl"))
     tag_df=tag_df.asfreq('T', method='ffill')#.resample('1min').mean()#
     tag_df=tag_df.interpolate(method='linear', axis=0)
 
@@ -96,7 +94,7 @@ def generate_labels(well_id,
     ## A threshold is applied to this of "spike_diff_threshold" and the spike_label_trace is created by assigning a value of 1 
     ## to a time window from an hour before up until the detected spike.
     
-    tag_df=pd.read_pickle(f'/home/ec2-user/SageMaker/efs/data/{data_from_folder}/limited_tag_{well_id}.pkl')
+    tag_df=pd.read_pickle(Path.data(f"{well_id}_2016-01-01_2023-01-01_raw.pkl"))
     tag_df=tag_df.asfreq('T', method='nearest')
 
     tag_df.loc[off_trace['off']==1,[feat]]=np.nan
@@ -110,10 +108,6 @@ def generate_labels(well_id,
     spike_label_df[spike_label_df.isna()]=0
      #######################################################   
     
-    spike_label_df.to_pickle(f'/home/ec2-user/SageMaker/efs/labels/{output_save_folder}/1hrtorque_spike_label_{well_id}.pkl')
-    ramping_alert_df.to_pickle(f'/home/ec2-user/SageMaker/efs/labels/{output_save_folder}/ramping_alert_df{well_id}.pkl')
-    off_trace.to_pickle(f'/home/ec2-user/SageMaker/efs/labels/{output_save_folder}/off_trace{well_id}.pkl')
-    flush_trace.to_pickle(f'/home/ec2-user/SageMaker/efs/labels/{output_save_folder}/flush_trace{well_id}.pkl')
-    differential.to_pickle(f'/home/ec2-user/SageMaker/efs/labels/{output_save_folder}/ramping_diff_val_{well_id}.pkl')
-    integral.to_pickle(f'/home/ec2-user/SageMaker/efs/labels/{output_save_folder}/ramping_int_val_{well_id}.pkl')
+    spike_label_df.to_pickle(Path.data(f"{well_id}_2016-01-01_2023-01-01_spike_label.pkl"))
+    ramping_alert_df.to_pickle(Path.data(f"{well_id}_2016-01-01_2023-01-01_ramp_label.pkl"))
     return spike_label_df, ramping_alert_df

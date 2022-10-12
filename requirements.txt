@@ -11,3 +11,4 @@ tiler
 geopy
 boto3
 sqlalchemy
+sklearn 

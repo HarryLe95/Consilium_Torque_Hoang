@@ -1,21 +1,17 @@
 import pandas as pd 
 import numpy as np 
-from pathlib import Path
 from datetime import timedelta 
 from src.utils.PathManager import Paths as Path
 
-EFS_PATH = Path('/home/ec2-user/SageMaker/efs/')
-data_from_folder='brett_extract_from_s3'
-output_save_folder='att2_new_extracts'
 
 def get_data(well_id, label_df=None, buffer_days=30):
-    tag_df=pd.read_pickle(f'/home/ec2-user/SageMaker/efs/data/{data_from_folder}/limited_tag_{well_id}.pkl')
+    tag_df=pd.read_pickle(Path.data(f"{well_id}_2016-01-01_2023-01-01_raw.pkl"))
     tag_df=tag_df.asfreq('T', method='ffill')#.resample('1min').mean()#
     tag_df=tag_df.interpolate(method='linear', axis=0)
 
-    ramp_df = pd.read_pickle(f'/home/ec2-user/SageMaker/efs/labels/{output_save_folder}/ramping_alert_df{well_id}.pkl')
+    ramp_df = pd.read_pickle(Path.data(f"{well_id}_2016-01-01_2023-01-01_ramp_label.pkl"))
     ramp_df = ramp_df[ramp_df.ramp_label==1]
-    spike_df = pd.read_pickle(f'/home/ec2-user/SageMaker/efs/labels/{output_save_folder}/1hrtorque_spike_label_{well_id}.pkl')
+    spike_df = pd.read_pickle(Path.data(f"{well_id}_2016-01-01_2023-01-01_spike_label.pkl"))
     spike_df = spike_df[spike_df.spike_label==1]
     label = label_df[label_df.WellCD==well_id].sort_index()
 
