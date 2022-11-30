@@ -1,0 +1,21 @@
+KEY,VALUE,TYPE
+application_name,'ROC Config',str
+cfg_s3_info,"{'connection_type' : 's3',
+              'user'   : None,
+              'region' : 'ap-southeast-2',
+              'bucket' : 'aa-trq-model-1-task0370756-poc-syd-174396275689',
+              'path' : 'TORQUE/TAG_DATA',
+              'file_prefix' : 'TRQ_TAG_DATA',
+              'file_suffix' : '.csv',
+              'parition_mode' : None}",dict
+cfg_file_info,"{'connection_type' : 'file',
+                'path' : 'C:/Users/HoangLe/app_prod/roc',
+                'partition_mode' : None,
+                'file_prefix' : 'TRQ_TAG_DATA',
+                'file_suffix' : '.csv',
+                'parition_mode' : None}",dict
+
+                
+                
+                
+

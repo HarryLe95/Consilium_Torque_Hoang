@@ -1,0 +1,20 @@
+KEY,VALUE,TYPE
+all_wells,"['BIGL20', 'BIGL22', 'MOOM115', 'MOOM157', 'WKT3']",list
+test_wells,['WKT3'],list
+features,"['ROC_VOLTAGE', 'Mask_ROC_VOLTAGE', 'temperature_2m', 'cloudcover', 'cloudcover_low', 'cloudcover_mid', 'cloudcover_high', 'shortwave_radiation', 'direct_radiation', 'diffuse_radiation', 'direct_normal_irradiance']",list
+num_days,1,int
+last_day,2022-06-30,date
+normalise_mode,all,str
+base_lr,0.0005,float
+early_stopping_patience,15,int
+reduce_lr_patience,7,int
+label_mapping,"{0: 0, 9: 1}",dict
+drop_labels,"[1, 2, 3, 4, 5, 6, 7, 8]",list
+batch_size,32,int
+optimiser,adam,str
+num_epochs,100,int
+metrics,"['acc', 'iou']",list
+use_pretrain,False,bool
+pretrain_model,,str
+save_model,True,bool
+save_name,weather_model,str
