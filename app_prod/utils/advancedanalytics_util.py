@@ -1,24 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-Created: 2022-09-09
+Created: 2022-11-09
 @author: Steve Lechowicz
 
 Santos Advanced Analytics 
-SandboxProductionLoop data access utilities
+SandboxProductionLoop data access utility
 
 NOTE: Santos standards mandate NO HARD-CODING of credentials in any source code.
 """
+
 # Compatibility
 from __future__ import print_function
-from abc import ABC, abstractmethod
 
 # Imports
+from abc import ABC, abstractmethod
 import os
 import io
 import ast
 import boto3
 import pandas as pd
-from datetime import datetime
+import numpy as np
+from datetime import datetime, timedelta
 from pandas import Timestamp
 import pytz
 from pytz import timezone
@@ -35,19 +37,23 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy import text
 try:
     import utils.advancedanalytics_access as aa
-except:
+except Exception:
     pass
 try:
     import cx_Oracle
-except:
+except Exception:
     pass
 try:
     import pymssql
-except:
+except Exception:
     pass
 try:
     from p2 import P2ServerClient
-except:
+except Exception:
+    pass
+try:
+    import snowflake.connector as snow
+except Exception:
     pass
 
 class AAPandaSQLException(Exception):
@@ -80,7 +86,7 @@ class AAPandaSQL:
         """
         if env is None:
             env = get_outer_frame_variables()
-
+        result = None
         with self.conn as conn:
             rtbl, wtbl = extract_table_names(query)
             if len(rtbl) > 0:
@@ -115,7 +121,7 @@ class AAPandaSQL:
                     self.loaded_tables.add(table_name)
                     write_table(env[table_name], table_name, conn)
                 prms = env['dst_data'].to_dict(orient='records')
-                insert_sql(query, conn, cur=None, args=prms)
+                insert_sql(query, conn, args=prms)
                 result = read_sql('SELECT * FROM {}'.format(table_name), conn)
         return result
 
@@ -172,12 +178,12 @@ def write_table(df, tablename, conn):
         to_sql(df, name=tablename, con=conn,
                index=not any(name is None for name in df.index.names))  # load index into db if all levels are named
 
-def insert_sql(sql, conn, cur=None, args=None):
+def insert_sql(sql, conn, args=None):
     for v in args:
         for k in v:
             v[k] = str(v[k])
     tsql = text(sql)
-    execute(tsql, con=conn, cur=cur, params=args)
+    execute(tsql, con=conn, params=args)
 
 def aasqldf(query, env=None, db_uri='sqlite:///:memory:'):
     """
@@ -229,6 +235,8 @@ def aauconnect_(info, connection_type=None):
         con = Oracle(info)
     elif connection_type == 'sql':
         con = SQLServer(info)
+    elif connection_type == 'sf':
+        con = Snowflake(info)
     return con
 
 class AAUConnection(ABC):
@@ -240,13 +248,13 @@ class AAUConnection(ABC):
 
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_value, traceback):
         if self.client is not None:
             try:
                 self.client.close()
                 self.client = None
-            except:
+            except Exception:
                 pass
 
     def __repr__(self):
@@ -264,7 +272,7 @@ class AAUConnection(ABC):
     @abstractmethod
     def _connect_(self, do_raise=True):
         pass
-            
+
     def reconnect(self):
         return self._connect_()
 
@@ -275,19 +283,75 @@ class AAUConnection(ABC):
     @abstractmethod
     def write(self, sql=None, args=[], edit=[], do_raise=True, **kwargs):
         pass
-    
+
     @abstractmethod
     def write_many(self, sql, args=[], edit=[], do_raise=True, **kwargs):
         pass
+
+    def get_filestartend(self, data_start, data_end, **kwargs):
+        if 'partition_mode' in kwargs:
+            pm = kwargs['partition_mode']
+        else:
+            pm = self.info['partition_mode']
+        if pm in ['day', 'month', 'year', 'alltime']:
+            y = data_start.year
+            m = data_start.month
+            d = data_start.day
+            fstart = datetime(y, m, d)
+            if pm == 'day':
+                fend = fstart + timedelta(days=1)
+            elif pm == 'month':
+                fstart = datetime(y, m, 1)
+                fend = fstart + timedelta(days=32)
+                fend = datetime(fend.year, fend.month, 1)
+            elif pm == 'year':
+                fstart = datetime(y, 1, 1)
+                fend = datetime(fstart.year+1, 1, 1)
+            elif pm == 'alltime':
+                fend = datetime(data_end.year, data_end.month, data_end.day) + timedelta(days=1)
+            else:
+                raise ValueError('Invalid partition mode')
+                return
+        elif pm is None:
+            return None, None
+        else:
+            raise ValueError('Invalid partition mode')
+            return
+        return fstart, fend
+
+    def get_filename(self, data_start, data_end, **kwargs):
+        if 'partition_mode' in kwargs:
+            pm = kwargs['partition_mode']
+        else:
+            pm = self.info['partition_mode']
+        if 'file_prefix' in kwargs:
+            fp = kwargs['file_prefix']
+        else:
+            fp = self.info['file_prefix']
+        if 'file_suffix' in kwargs:
+            fs = kwargs['file_suffix']
+        else:
+            fs = self.info['file_suffix']
+        if pm in ['day', 'month', 'year', 'alltime']:
+            fn = '{}{}_{}{}'.format(fp, data_start.strftime('%Y%m%d'), data_end.strftime('%Y%m%d'), fs)
+        elif pm is None:
+            return None
+        else:
+            raise ValueError('Invalid partition mode')
+            return
+        return fn
 
     def orient_and_parse(self, df, orient, timezone, **kwargs):
         args_ts = []
         if 'args_ts' in kwargs:
             args_ts = kwargs['args_ts']
+        elif 'args_ts' in self.info:
+            args_ts = self.info['args_ts']
         for c in df.columns:
             try:
                 df[c] = df[c].replace({'None' : None})
                 df[c] = df[c].replace({'nan' : None})
+                df[c] = df[c].replace({'NaT' : None})
             except TypeError:
                 pass
         if orient == 'records':
@@ -433,11 +497,16 @@ class P2Connection(AAUConnection):
                 df = df.loc[(df['TS'] >= tstart) & (df['TS'] <= tend)]
                 df = df.loc[df['CONF'] == 100]
                 df = df.where(df.notnull(), None)
+                df.insert(0, 'TAG', tags[i][1:-1])
                 if sql is None:
                     data[i] = self.orient_and_parse(df, orient, timezone, **kwargs)
                 else:
                     df = self.orient_and_parse(df, 'df', timezone, **kwargs)
-                    locals()[dfns[i]] = df
+                    if i > 0 and dfns[i] in dfns[:i]:
+                        df_ = locals()[dfns[i]]
+                        locals()[dfns[i]] = pd.concat([df_, df])
+                    else:
+                        locals()[dfns[i]] = df
             if sql is None:
                 return data
         except Exception as e:
@@ -518,52 +587,109 @@ class FileConnection(AAUConnection):
         @param do_raise <bool>: Boolean flag to suppress errors.
         @param kwargs   <dict>: Dict of additonal args required by File to emulate database connection
         """
-        fp = None
-        if 'path' in kwargs:
-            if 'file' in kwargs:
-                fp = os.path.join(kwargs['path'], kwargs['file'])
-            elif os.path.isfile(kwargs['path']):
-                fp = kwargs['path']
-            else:
-                files = self.get_files(kwargs['path'])
-                if len(files) > 0:
-                    fp = os.path.join(kwargs['path'], files[0])
-        elif 'file' in kwargs:
-            if 'path' in self.info:
-                fp = os.path.join(self.info['path'], kwargs['file'])
-            if not os.path.isfile(fp) and os.path.isfile(kwargs['file']):
-                fp = kwargs['file']
-        elif 'path' in self.info:
-            if 'file' in self.info:
-                fp = os.path.join(self.info['path'], self.info['file'])
-            elif os.path.isfile(self.info['path']):
-                fp = self.info['path']
-        elif 'file' in self.info:
-            if os.path.isfile(self.info['file']):
-                fp = self.info['file']
-
-        if fp is None or not os.path.isfile(fp):
-            self._error_handler_(ValueError('File Connection - invalid file path'), do_raise)
-            return None
-
         if 'engine' in kwargs:
             engine = kwargs['engine']
         elif 'engine' in self.info:
             engine = self.info['engine']
         else:
             engine = 'c'
-        try:
-            if fp.endswith('parquet'):
-                df = pd.read_parquet(fp)
-            elif fp.endswith('csv'):
-                df = pd.read_csv(fp, engine=engine, encoding='cp1252')
-            else:
-                self._error_handler_(ValueError('File Connection - invalid file type'), do_raise)
+        fp = None
+        if 'path' in kwargs:
+            fp = kwargs['path']
+        elif 'path' in self.info:
+            fp = self.info['path']
+        if 'partition_mode' in kwargs:
+            partition_mode = kwargs['partition_mode']
+        else:
+            partition_mode = self.info['partition_mode']
+        if partition_mode is None:
+            try:
+                if fp is None:
+                    if 'file' in kwargs:
+                        fp = kwargs['file']
+                    elif 'file' in self.info:
+                        fp = self.info['file']
+                else:
+                    if 'file' in kwargs:
+                        fp = '{}/{}'.format(fp, kwargs['file'])
+                    elif 'file' in self.info:
+                        fp = '{}/{}'.format(fp, self.info['file'])
+                if fp.endswith('parquet'):
+                    df = pd.read_parquet(fp)
+                elif fp.endswith('csv'):
+                    df = pd.read_csv(fp, engine=engine, encoding='cp1252')
+                else:
+                    self._error_handler_(ValueError('File Connection - invalid file type'), do_raise)
+                    return None
+            except Exception as e:
+                self._error_handler_(e, do_raise)
                 return None
-        except Exception as e:
-            self._error_handler_(e, do_raise)
-            return None
-
+        elif partition_mode in ['day', 'month', 'year', 'alltime']:
+            if 'data_index_column' in kwargs:
+                idx = kwargs['data_index_column']
+            else:
+                idx = self.info['data_index_column']
+            if 'start' in kwargs:
+                data_start = kwargs['start']
+            else:
+                data_start = self.info['start']
+            if 'end' in kwargs:
+                data_end = kwargs['end']
+            else:
+                data_end = self.info['end']
+            data = []
+            fs, fe = self.get_filestartend(data_start, data_end, **kwargs)
+            if data_end < fe:
+                fn = self.get_filename(fs, fe, **kwargs)
+                if fp is None:
+                    fpn = fn
+                else:
+                    fpn = '{}/{}'.format(fp, fn)
+                try:
+                    if fn.endswith('parquet'):
+                        data.append(pd.read_parquet(fpn))
+                    elif fn.endswith('csv'):
+                        data.append(pd.read_csv(fpn, engine=engine, encoding='cp1252'))
+                    else:
+                        self._error_handler_(ValueError('File Connection - invalid file type'), do_raise)
+                        return None
+                except Exception:
+                    pass
+            while (data_end >= fe):
+                fn = self.get_filename(fs, fe, **kwargs)
+                if fp is None:
+                    fpn = fn
+                else:
+                    fpn = '{}/{}'.format(fp, fn)
+                try:
+                    if fn.endswith('parquet'):
+                        data.append(pd.read_parquet(fpn))
+                    elif fn.endswith('csv'):
+                        data.append(pd.read_csv(fpn, engine=engine, encoding='cp1252'))
+                    else:
+                        self._error_handler_(ValueError('File Connection - invalid file type'), do_raise)
+                        return None
+                except Exception:
+                    pass
+                data_start = fe
+                fs, fe = self.get_filestartend(data_start, data_end, **kwargs)
+            if len(data) > 1:
+                df = pd.concat(data).drop_duplicates([idx], keep='last')
+            elif len(data) > 0 and len(data[0]) > 0:
+                df = data[0]
+            else:
+                cols = None
+                if 'colnames' in kwargs and len(kwargs['colnames']) > 0:
+                    cols = kwargs['colnames']
+                if orient == 'records':
+                    return list()
+                elif orient == 'list':
+                    if cols is None:
+                        return {}
+                    return dict.fromkeys(cols, ())
+                else:
+                    df = pd.DataFrame(columns=cols)
+                    return df
         if sql is None:
             return self.orient_and_parse(df, orient, self.timezone, **kwargs)
         try:
@@ -593,41 +719,73 @@ class FileConnection(AAUConnection):
             append = self.info['append']
         else:
             append = True
-
-        fp = None
-        if 'path' in kwargs:
-            if 'file' in kwargs:
-                fp = os.path.join(kwargs['path'], kwargs['file'])
-            elif os.path.isfile(kwargs['path']):
-                fp = kwargs['path']
-            else:
-                files = self.get_files(kwargs['path'])
-                if len(files) > 0:
-                    fp = os.path.join(kwargs['path'], files[0])
-        elif 'file' in kwargs:
-            if 'path' in self.info:
-                fp = os.path.join(self.info['path'], kwargs['file'])
-            if not os.path.isfile(fp) and os.path.isfile(kwargs['file']):
-                fp = kwargs['file']
-        elif 'path' in self.info:
-            if 'file' in self.info:
-                fp = os.path.join(self.info['path'], self.info['file'])
-            elif os.path.isfile(self.info['path']):
-                fp = self.info['path']
-        elif 'file' in self.info:
-            if os.path.isfile(self.info['file']):
-                fp = self.info['file']
-        if fp is None:
-            self._error_handler_(ValueError('File Connection - invalid file path'), do_raise)
-            return False
         if sql is None:
             try:
                 if isinstance(args, list) or isinstance(args, dict):
                     df = pd.DataFrame(args)
                 else:
                     df = args
+            except Exception as e:
+                self._error_handler_(e, do_raise)
+                return False
+        else:
+            try:
+                destination_schema = {}
+                for key, val in kwargs['dst_schema'].items():
+                    if type(val) is str:
+                        if val.startswith('pd.Series(dtype=') and val.endswith(')'):
+                            tp = val[16:-1]
+                            if tp == 'str':
+                                destination_schema[key] = pd.Series(dtype=str)
+                            elif tp == 'int':
+                                destination_schema[key] = pd.Series(dtype=int)
+                            elif tp == 'bool':
+                                destination_schema[key] = pd.Series(dtype=bool)
+                            elif tp == 'float':
+                                destination_schema[key] = pd.Series(dtype=float)
+                            elif tp == 'object':
+                                destination_schema[key] = pd.Series(dtype=object)
+                    else:
+                        destination_schema[key] = val
+                dst_df = pd.DataFrame(destination_schema)
+                locals()[kwargs['dst_table']] = dst_df
+                if isinstance(args, list) or isinstance(args, dict):
+                    locals()['dst_data'] = pd.DataFrame(args)
+                else:
+                    locals()['dst_data'] = args
+                data = aasqldf(sql.format(*edit), locals())
+                df = self.orient_and_parse(data, 'df', None, **kwargs)
+            except Exception as e:
+                self._error_handler_(e, do_raise)
+                return False
+        fp = None
+        if 'path' in kwargs:
+            fp = kwargs['path']
+        elif 'path' in self.info:
+            fp = self.info['path']
+        args_ts = ['TS']
+        if 'args_ts' in kwargs:
+            args_ts = kwargs['args_ts']
+        elif 'args_ts' in self.info:
+            args_ts = self.info['args_ts']
+        if 'partition_mode' in kwargs:
+            partition_mode = kwargs['partition_mode']
+        else:
+            partition_mode = self.info['partition_mode']
+        if partition_mode is None:
+            try:
+                if fp is None:
+                    if 'file' in kwargs:
+                        fp = kwargs['file']
+                    elif 'file' in self.info:
+                        fp = self.info['file']
+                else:
+                    if 'file' in kwargs:
+                        fp = '{}/{}'.format(fp, kwargs['file'])
+                    elif 'file' in self.info:
+                        fp = '{}/{}'.format(fp, self.info['file'])
                 if fp.endswith('parquet'):
-                    pqt = df.to_parquet(path=fp, engine='auto', compression='snappy', index=False, partition_cols=None)
+                    _ = df.to_parquet(path=fp, engine='auto', compression='snappy', index=False, partition_cols=None)
                 elif fp.endswith('csv'):
                     if append is True:
                         if not os.path.isfile(fp):
@@ -643,30 +801,66 @@ class FileConnection(AAUConnection):
                 self._error_handler_(e, do_raise)
                 return False
         else:
-            try:
-                dst_df = pd.DataFrame(kwargs['dst_schema'])
-                locals()[kwargs['dst_table']] = dst_df
-                if isinstance(args, list) or isinstance(args, dict):
-                    locals()['dst_data'] = pd.DataFrame(args)
+            if len(df) > 0:
+                if 'data_index_column' in kwargs:
+                    idx = kwargs['data_index_column']
                 else:
-                    locals()['dst_data'] = args
-                data = aasqldf(sql.format(*edit), locals())
-                data = self.orient_and_parse(data, 'df', None, **kwargs)
-                if fp.endswith('parquet'):
-                    pqt = data.to_parquet(path=fp, engine='auto', compression='snappy', index=False, partition_cols=None)
-                elif fp.endswith('csv'):
-                    if append is True:
-                        if not os.path.isfile(fp):
-                            data.to_csv(path_or_buf=fp, index=False)
-                        else:
-                            data.to_csv(path_or_buf=fp, mode='a', header=False, index=False)
+                    idx = self.info['data_index_column']
+                data_start = df.head(1).iloc[0][idx]
+                data_end = df.tail(1).iloc[0][idx]
+                fs, fe = self.get_filestartend(data_start, data_end, **kwargs)
+                while (data_end >= fe):
+                    fn = self.get_filename(fs, fe, **kwargs)
+                    fdata = df.loc[(df[idx] >= fs) & (df[idx] < fe)]
+                    if idx in args_ts:
+                        fdata[idx] = fdata[idx].values.astype('<M8[s]')
+                    if fp is None:
+                        fpn = fn
                     else:
-                        data.to_csv(path_or_buf=fp, index=False)
+                        fpn = '{}/{}'.format(fp, fn)
+                    if fn.endswith('parquet'):
+                        _ = fdata.to_parquet(path=fpn, engine='auto', compression='snappy', index=False, partition_cols=None)
+                    elif fn.endswith('csv'):
+                        if append is True:
+                            if not os.path.isfile(fpn):
+                                fdata.to_csv(path_or_buf=fpn, index=False)
+                            else:
+                                fdata.to_csv(path_or_buf=fpn, mode='a', header=False, index=False)
+                        else:
+                            fdata.to_csv(path_or_buf=fpn, index=False)
+                    else:
+                        self._error_handler_(ValueError('File Connection - invalid file type'), do_raise)
+                        return False
+                    df = df.loc[(df[idx] >= fe)]
+                    if len(df[idx]) == 0:
+                        break
+                    data_start = df.head(1).iloc[0][idx]
+                    fs, fe = self.get_filestartend(data_start, data_end, **kwargs)
+                if len(df[idx]) == 0:
+                    return True
+                fn = self.get_filename(fs, fe, **kwargs)
+                fdata = df.loc[(df[idx] >= fs) & (df[idx] < fe)]
+                if idx in args_ts:
+                    fdata[idx] = fdata[idx].values.astype('<M8[s]')
+                if fp is None:
+                    fpn = fn
+                else:
+                    fpn = '{}/{}'.format(fp, fn)
+                if fn.endswith('parquet'):
+                    _ = fdata.to_parquet(path=fpn, engine='auto', compression='snappy', index=False, partition_cols=None)
+                elif fn.endswith('csv'):
+                    if append is True:
+                        if not os.path.isfile(fpn):
+                            fdata.to_csv(path_or_buf=fpn, index=False)
+                        else:
+                            fdata.to_csv(path_or_buf=fpn, mode='a', header=False, index=False)
+                    else:
+                        fdata.to_csv(path_or_buf=fpn, index=False)
                 else:
                     self._error_handler_(ValueError('File Connection - invalid file type'), do_raise)
                     return False
-            except Exception as e:
-                self._error_handler_(e, do_raise)
+            else:
+                self._error_handler_(ValueError('File Connection - no data'), do_raise)
                 return False
         return True
 
@@ -721,7 +915,7 @@ class S3Connection(AAUConnection):
             self.s3 = boto3.resource('s3', region_name=self.info['region'])
             self.client = boto3.client('s3')
         else:
-            pws = aa.AAAccess().get_pwd(self.info['bucket'], self.info['user'])
+            pws = aa.AAPWSAccess(self.info['access']).get_pwd(self.info['bucket'], self.info['user'])
             pub = pws['public_key']
             pri = pws['private_key']
             if pri is not None:
@@ -779,68 +973,122 @@ class S3Connection(AAUConnection):
         @param kwargs   <dict>: Dict of additonal args required by File to emulate database connection
         """
         if self.s3 is None:
-            self._error_handler_(ValueError('S3 Connection is None'), do_raise)
-            return None
-
+            self._error_handler_(ValueError('No S3 Connection'), do_raise)
+            return False
         b = None
-        fp = None
-        read_string = False
-        read_blob = False
         if 'bucket' in kwargs:
             b = kwargs['bucket']
         elif 'bucket' in self.info:
             b = self.info['bucket']
+        fp = None
         if 'path' in kwargs:
-            if 'file' in kwargs:
-                fp = '{}/{}'.format(kwargs['path'], kwargs['file'])
-            else:
-                fp = kwargs['path']
-        elif 'file' in kwargs:
-            if 'path' in self.info:
-                fp = '{}/{}'.format(self.info['path'], kwargs['file'])
-            else:
-                fp = kwargs['file']
+            fp = kwargs['path']
         elif 'path' in self.info:
-            if 'file' in self.info:
-                fp = '{}/{}'.format(self.info['path'], self.info['file'])
-            else:
-                fp = self.info['path']
-        elif 'file' in self.info:
-            fp = self.info['file']
+            fp = self.info['path']
         if 'engine' in kwargs:
             engine = kwargs['engine']
         elif 'engine' in self.info:
             engine = self.info['engine']
         else:
             engine = 'c'
+        if b is None:
+            self._error_handler_(ValueError('S3 Connection - invalid path'), do_raise)
+            return False
+        read_string = False
+        read_blob = False
         if 'read_string' in kwargs:
             read_string = kwargs['read_string']
         if 'read_blob' in kwargs:
             read_blob = kwargs['read_blob']
-        try:
-            s3obj = self.client.get_object(Bucket=b, Key=fp)
-            if read_string is True:
-                bio = io.BytesIO()
-                self.client.download_fileobj(b, fp, bio)
-                byte_str = bio.getvalue()
-                text_obj = byte_str.decode('UTF-8')
-                sio = io.StringIO(text_obj)
-                return sio
-            elif read_blob is True:
-                bio = io.BytesIO()
-                self.client.download_fileobj(b, fp, bio)
-                return bio
-            elif fp.endswith('parquet'):
-                df = pd.read_parquet(io.BytesIO(s3obj['Body'].read()))
-            elif fp.endswith('csv'):
-                df = pd.read_csv(io.BytesIO(s3obj['Body'].read()), engine=engine, encoding='cp1252')
-            else:
-                self._error_handler_(ValueError('S3 Connection - invalid type'), do_raise)
+        if 'partition_mode' in kwargs:
+            partition_mode = kwargs['partition_mode']
+        else:
+            partition_mode = self.info['partition_mode']
+        if partition_mode is None:
+            try:
+                if fp is None:
+                    if 'file' in kwargs:
+                        fp = kwargs['file']
+                    elif 'file' in self.info:
+                        fp = self.info['file']
+                else:
+                    if 'file' in kwargs:
+                        fp = '{}/{}'.format(fp, kwargs['file'])
+                    elif 'file' in self.info:
+                        fp = '{}/{}'.format(fp, self.info['file'])
+                s3obj = self.client.get_object(Bucket=b, Key=fp)
+                if read_string is True:
+                    bio = io.BytesIO()
+                    self.client.download_fileobj(b, fp, bio)
+                    byte_str = bio.getvalue()
+                    text_obj = byte_str.decode('UTF-8')
+                    sio = io.StringIO(text_obj)
+                    return sio
+                elif read_blob is True:
+                    bio = io.BytesIO()
+                    self.client.download_fileobj(b, fp, bio)
+                    return bio
+                elif fp.endswith('parquet'):
+                    df = pd.read_parquet(io.BytesIO(s3obj['Body'].read()))
+                elif fp.endswith('csv'):
+                    df = pd.read_csv(io.BytesIO(s3obj['Body'].read()), engine=engine, encoding='cp1252')
+                else:
+                    self._error_handler_(ValueError('S3 Connection - invalid type'), do_raise)
+                    return None
+            except Exception as e:
+                self._error_handler_(e, do_raise)
                 return None
-        except Exception as e:
-            self._error_handler_(e, do_raise)
-            return None
-
+        elif partition_mode in ['day', 'month', 'year', 'alltime']:
+            if 'data_index_column' in kwargs:
+                idx = kwargs['data_index_column']
+            else:
+                idx = self.info['data_index_column']
+            if 'start' in kwargs:
+                data_start = kwargs['start']
+            elif 'start' in self.info:
+                data_start = self.info['start']
+            if 'end' in kwargs:
+                data_end = kwargs['end']
+            elif 'end' in self.info:
+                data_end = self.info['end']
+            data = []
+            fs, fe = self.get_filestartend(data_start, data_end, **kwargs)
+            while (data_end >= fe):
+                fn = self.get_filename(fs, fe, **kwargs)
+                if fp is None:
+                    fpn = fn
+                else:
+                    fpn = '{}/{}'.format(fp, fn)
+                try:
+                    s3obj = self.client.get_object(Bucket=b, Key=fpn)
+                    if fn.endswith('parquet'):
+                        data.append(pd.read_parquet(io.BytesIO(s3obj['Body'].read())))
+                    elif fn.endswith('csv'):
+                        data.append(pd.read_csv(io.BytesIO(s3obj['Body'].read()), engine=engine, encoding='cp1252'))
+                    else:
+                        self._error_handler_(ValueError('S3 Connection - invalid type'), do_raise)
+                        return None
+                except Exception:
+                    pass
+                data_start = fe
+                fs, fe = self.get_filestartend(data_start, data_end, **kwargs)
+            if len(data) > 1:
+                df = pd.concat(data).drop_duplicates([idx], keep='last')
+            elif len(data) > 0 and len(data[0]) > 0:
+                df = data[0]
+            else:
+                cols = None
+                if 'colnames' in kwargs and len(kwargs['colnames']) > 0:
+                    cols = kwargs['colnames']
+                if orient == 'records':
+                    return list()
+                elif orient == 'list':
+                    if cols is None:
+                        return {}
+                    return dict.fromkeys(cols, ())
+                else:
+                    df = pd.DataFrame(columns=cols)
+                    return df
         if sql is None:
             return self.orient_and_parse(df, orient, self.timezone, **kwargs)
         try:
@@ -868,58 +1116,87 @@ class S3Connection(AAUConnection):
         @param kwargs   <dict>: Dict of additonal args required by File to emulate database connection
         """
         if self.s3 is None:
-            self._error_handler_(ValueError('S3 Connection is None'), do_raise)
+            self._error_handler_(ValueError('No S3 Connection'), do_raise)
             return False
-
-        b = None
-        fp = None
-        if 'bucket' in kwargs:
-            b = kwargs['bucket']
-        elif 'bucket' in self.info:
-            b = self.info['bucket']
-        if 'path' in kwargs:
-            if 'file' in kwargs:
-                if kwargs['path'] is None:
-                    fp = kwargs['file']
-                else:
-                    fp = '{}/{}'.format(kwargs['path'], kwargs['file'])
-            else:
-                fp = kwargs['path']
-        elif 'file' in kwargs:
-            if 'path' in self.info:
-                if self.info['path'] is None:
-                    fp = kwargs['file']
-                else:
-                    fp = '{}/{}'.format(self.info['path'], kwargs['file'])
-            else:
-                fp = kwargs['file']
-        elif 'path' in self.info:
-            if 'file' in self.info:
-                if self.info['path'] is None:
-                    fp = self.info['file']
-                else:
-                    fp = '{}/{}'.format(self.info['path'], self.info['file'])
-            else:
-                fp = self.info['path']
-        elif 'file' in self.info:
-            fp = self.info['file']
-        if 'engine' in kwargs:
-            engine = kwargs['engine']
-        elif 'engine' in self.info:
-            engine = self.info['engine']
-        else:
-            engine = 'c'
-
-        if b is None or fp is None:
-            self._error_handler_(ValueError('S3 Connection - invalid path'), do_raise)
-            return False
-
         if sql is None:
             try:
                 if isinstance(args, list) or isinstance(args, dict):
                     df = pd.DataFrame(args)
                 else:
                     df = args
+            except Exception as e:
+                self._error_handler_(e, do_raise)
+                return False
+        else:
+            try:
+                destination_schema = {}
+                for key, val in kwargs['dst_schema'].items():
+                    if type(val) is str:
+                        if val.startswith('pd.Series(dtype=') and val.endswith(')'):
+                            tp = val[16:-1]
+                            if tp == 'str':
+                                destination_schema[key] = pd.Series(dtype=str)
+                            elif tp == 'int':
+                                destination_schema[key] = pd.Series(dtype=int)
+                            elif tp == 'bool':
+                                destination_schema[key] = pd.Series(dtype=bool)
+                            elif tp == 'float':
+                                destination_schema[key] = pd.Series(dtype=float)
+                            elif tp == 'object':
+                                destination_schema[key] = pd.Series(dtype=object)
+                    else:
+                        destination_schema[key] = val
+                dst_df = pd.DataFrame(destination_schema)
+                locals()[kwargs['dst_table']] = dst_df
+                if isinstance(args, list) or isinstance(args, dict):
+                    locals()['dst_data'] = pd.DataFrame(args)
+                else:
+                    locals()['dst_data'] = args
+                data = aasqldf(sql.format(*edit), locals())
+                df = self.orient_and_parse(data, 'df', None, **kwargs)
+            except Exception as e:
+                self._error_handler_(e, do_raise)
+                return False
+        b = None
+        if 'bucket' in kwargs:
+            b = kwargs['bucket']
+        elif 'bucket' in self.info:
+            b = self.info['bucket']
+        fp = None
+        if 'path' in kwargs:
+            fp = kwargs['path']
+        elif 'path' in self.info:
+            fp = self.info['path']
+        if 'engine' in kwargs:
+            engine = kwargs['engine']
+        elif 'engine' in self.info:
+            engine = self.info['engine']
+        else:
+            engine = 'c'
+        args_ts = ['TS']
+        if 'args_ts' in kwargs:
+            args_ts = kwargs['args_ts']
+        elif 'args_ts' in self.info:
+            args_ts = self.info['args_ts']
+        if b is None:
+            self._error_handler_(ValueError('S3 Connection - invalid path'), do_raise)
+            return False
+        if 'partition_mode' in kwargs:
+            partition_mode = kwargs['partition_mode']
+        else:
+            partition_mode = self.info['partition_mode']
+        if partition_mode is None:
+            try:
+                if fp is None:
+                    if 'file' in kwargs:
+                        fp = kwargs['file']
+                    elif 'file' in self.info:
+                        fp = self.info['file']
+                else:
+                    if 'file' in kwargs:
+                        fp = '{}/{}'.format(fp, kwargs['file'])
+                    elif 'file' in self.info:
+                        fp = '{}/{}'.format(fp, self.info['file'])
                 if fp.endswith('parquet'):
                     f = df.to_parquet(path=None, engine='auto', compression='snappy', index=False, partition_cols=None)
                 elif fp.endswith('csv'):
@@ -933,25 +1210,58 @@ class S3Connection(AAUConnection):
                 self._error_handler_(e, do_raise)
                 return False
         else:
-            try:
-                dst_df = pd.DataFrame(kwargs['dst_schema'])
-                locals()[kwargs['dst_table']] = dst_df
-                if isinstance(args, list) or isinstance(args, dict):
-                    locals()['dst_data'] = pd.DataFrame(args)
+            if len(df) > 0:
+                if 'data_index_column' in kwargs:
+                    idx = kwargs['data_index_column']
                 else:
-                    locals()['dst_data'] = args
-                data = aasqldf(sql.format(*edit), locals())
-                if fp.endswith('parquet'):
-                    f = data.to_parquet(path=None, engine='auto', compression='snappy', index=False, partition_cols=None)
-                elif fp.endswith('csv'):
-                    f = data.to_csv(path_or_buf=None, index=False)
+                    idx = self.info['data_index_column']
+                data_start = df.head(1).iloc[0][idx]
+                data_end = df.tail(1).iloc[0][idx]
+                fs, fe = self.get_filestartend(data_start, data_end, **kwargs)
+                while (data_end >= fe):
+                    fn = self.get_filename(fs, fe, **kwargs)
+                    fdata = df.loc[(df[idx] >= fs) & (df[idx] < fe)]
+                    if idx in args_ts:
+                        fdata[idx] = fdata[idx].values.astype('<M8[s]')
+                    if fp is None:
+                        fpn = fn
+                    else:
+                        fpn = '{}/{}'.format(fp, fn)
+                    if fn.endswith('parquet'):
+                        f = fdata.to_parquet(path=None, engine='auto', compression='snappy', index=False, partition_cols=None)
+                    elif fn.endswith('csv'):
+                        f = fdata.to_csv(path_or_buf=None, index=False)
+                    else:
+                        self._error_handler_(ValueError('S3 Connection - invalid file type'), do_raise)
+                        return False
+                    s3obj = self.s3.Object(b, fpn)
+                    s3obj.put(Body=f)
+                    df = df.loc[(df[idx] >= fe)]
+                    if len(df[idx]) == 0:
+                        break
+                    data_start = df.head(1).iloc[0][idx]
+                    fs, fe = self.get_filestartend(data_start, data_end, **kwargs)
+                if len(df[idx]) == 0:
+                    return True
+                fn = self.get_filename(fs, fe, **kwargs)
+                fdata = df.loc[(df[idx] >= fs) & (df[idx] < fe)]
+                if idx in args_ts:
+                    fdata[idx] = fdata[idx].values.astype('<M8[s]')
+                if fp is None:
+                    fpn = fn
+                else:
+                    fpn = '{}/{}'.format(fp, fn)
+                if fn.endswith('parquet'):
+                    f = fdata.to_parquet(path=None, engine='auto', compression='snappy', index=False, partition_cols=None)
+                elif fn.endswith('csv'):
+                    f = fdata.to_csv(path_or_buf=None, index=False)
                 else:
                     self._error_handler_(ValueError('S3 Connection - invalid file type'), do_raise)
                     return False
-                s3obj = self.s3.Object(b, fp)
+                s3obj = self.s3.Object(b, fpn)
                 s3obj.put(Body=f)
-            except Exception as e:
-                self._error_handler_(e, do_raise)
+            else:
+                self._error_handler_(ValueError('File Connection - no data'), do_raise)
                 return False
         return True
 
@@ -1191,7 +1501,7 @@ class OracleDatabaseConnection(AAUConnection):
         Retrieve password and connect to database. Store connection.
         """
         try:
-            pwd = aa.AAAccess().get_pwd(self.info['db'], self.info['usr'])['password']
+            pwd = aa.AAPWSAccess(self.info['access']).get_pwd(self.info['db'], self.info['usr'])['password']
             if pwd is not None:
                 self.con = cx_Oracle.connect(self.info['usr'], pwd, self.info['db'], threaded=thread)
                 return True
@@ -1434,7 +1744,6 @@ class SQLServerDatabaseConnection(AAUConnection): # This is not compatible with 
     @param sid <str>: Service identifier
     @param usr <str>: Database user
     """
-
     def __exit__(self, exc_type, exc_value, traceback):
         if self.con is not None:
             try:
@@ -1451,7 +1760,7 @@ class SQLServerDatabaseConnection(AAUConnection): # This is not compatible with 
 
     def _connect_(self, do_raise=True):
         try:
-            pwd = aa.AAAccess().get_pwd(self.info['sid'], self.info['usr'])['password']
+            pwd = aa.AAPWSAccess(self.info['access']).get_pwd(self.info['sid'], self.info['usr'])['password']
             if pwd is not None:
                 self.con = pymssql.connect(self.info['srv'], self.info['usr'], pwd, self.info['db'])
                 return True
@@ -1571,4 +1880,202 @@ class MSSQL(SQLServerDatabaseConnection):
     def __repr__(self):
         return 'advancedanalytics_util.MSSQL(%r, %r, %r, %r)' % (self.srv, self.db, self.sid, self.usr)  
 
+# Snowflake Connection Class
+class SnowflakeConnection(AAUConnection):
+    """
+    Snowflake Wrapper
+    Usage: 
+            ...
+    """
+    def __repr__(self):
+        return 'advancedanalytics_util.SnowflakeConnection(%r)' % (self.info)
 
+    def __str__(self):
+        return 'SnowlflakeConnection: [INFO=%s]' % (self.info)
+
+    def _connect_(self, do_raise=True):
+        try:
+            pwd = aa.AAPWSAccess(self.info['access']).get_pwd(self.info['database'], self.info['user'])['password']
+            if pwd is not None:
+                if 'paramstyle' not in self.info:
+                    self.info['paramstyle'] = 'numeric'
+                snow.paramstyle = self.info['paramstyle']
+                self.client = snow.connect(
+                        user = self.info['user'],
+                        password = pwd,
+                        account = self.info['account_id'],
+                        warehouse = self.info['warehouse'],
+                        database = self.info['database'],
+                        schema = self.info['schema'],
+                        session_parameters = {
+                                'TIMESTAMP_TYPE_MAPPING': 'TIMESTAMP_NTZ'
+                            }
+                    )
+                return True
+            else:
+                self.client = None
+        except Exception as e:
+            self._error_handler_(e, do_raise)
+        return False
+
+    def read(self, sql, args={}, edit=[], orient='list', do_raise=True, **kwargs):
+        """
+        Execute query parsing return.
+        @param sql       <str>: Query to execute. 
+                                Allows string replacement through another argument and the string.format() method.
+                                However, this may block regular expressions from being hardcoded into the query. 
+                                In this case, generate the string within a script variable and then use a bind to insert the expression into the query.
+        @param args     <list>: Dictionary of bind or positional variables and their values for replacement. Keyword arguments will also be prepared into this dictionary.
+        @param edit     <list>: List of direct string replacement parameters in positional order.
+        @param orient    <str>: String to control return structure. Mirrors pandas options.
+        @param do_raise <bool>: Boolean flag to suppress errors.
+        """
+        if self.client is None:
+            raise ValueError('Snowflake client is None')
+            return None
+        if 'paramstyle' in kwargs:
+            if kwargs['paramstyle'] != self.info['paramstyle']:
+                self.info['paramstyle'] = kwargs['paramstyle']
+                self.reconnect()
+        timezone = None
+        if 'timezone' in kwargs:
+            tzname = kwargs['timezone']
+            if tzname in ['UTC', 'utc', 'GMT', 'gmt']:
+                timezone = pytz.UTC
+            elif tzname is not None and len(tzname) > 0:
+                timezone = timezone(tzname)
+        elif 'timezone' in self.info:
+            tzname = self.info['timezone']
+            if tzname in ['UTC', 'utc', 'GMT', 'gmt']:
+                timezone = pytz.UTC
+            elif tzname is not None and len(tzname) > 0:
+                timezone = timezone(tzname)
+        try:
+            cur = self.client.cursor()
+            cur.execute(sql.format(*edit), args)
+            df = cur.fetch_pandas_all()
+            cur.close()
+            return self.orient_and_parse(df, orient, timezone, **kwargs)
+        except Exception:
+            try:
+                sql = 'ALTER WAREHOUSE {} RESUME IF SUSPENDED'.format(self.info['warehouse'])
+                cur.execute(sql)
+                cur.execute(sql.format(*edit), args)
+                df = cur.fetch_pandas_all()
+                cur.close()
+                return self.orient_and_parse(df, orient, timezone, **kwargs)
+            except Exception as e:
+                cur.close()
+                self._error_handler_(e, do_raise)
+
+    def write(self, sql, args=[], edit=[], do_raise=True, **kwargs):
+        """
+        Execute query with explicit commit.
+        @param sql       <str>: Query to execute. 
+                                Allows string replacement through another argument and the string.format() method.
+                                However, this may block regular expressions from being hardcoded into the query. 
+                                In this case, generate the string within a script variable and then use a bind to insert the expression into the query.
+        @param args     <dict>: Dictionary of bind or positional variables and their values for replacement. Keyword arguments will also be prepared into this dictionary.
+        @param args_ts  <list>: In kwargs - List of bind variables that must have their cursor input size set to timestamp. [NOT COMPATIBLE WITH POSITIONAL ARGUMENTS]
+        @param edit     <list>: List of direct string replacement parameters in positional order.
+        @param do_raise <bool>: Boolean flag to suppress errors.
+        """
+        if self.client is None:
+            raise ValueError('Snowflake client is None')
+            return
+        try:
+            cur = self.client.cursor()
+            tsidx = [1 if isinstance(v, pd.Timestamp) else 0 for v in args]
+            args = [v if tsidx[i] == 0 else datetime(v.year, v.month, v.day, v.hour, v.minute, v.second) for i, v in enumerate(args)]
+            cur.execute(sql.format(*edit), args)
+            cur.close()
+        except Exception as e1:
+            try:
+                sql = 'ALTER WAREHOUSE {} RESUME IF SUSPENDED'.format(self.info['warehouse'])
+                cur.execute(sql)
+                cur.execute(sql.format(*edit), args)
+                cur.close()
+            except Exception as e2:
+                cur.close()
+                self._error_handler_(e1, False)
+                self._error_handler_(e2, do_raise)
+
+    def write_many(self, sql, args=[], edit=[], do_raise=True, **kwargs):
+        """
+        Execute query for multiple records with explicit commit.
+        @param sql        <str>: Query to execute. 
+                                 Allows string replacement through another argument and the string.format() method.
+                                 However, this may block regular expressions from being hardcoded into the query. 
+                                 In this case, generate the string within a script variable and then use a bind to insert the expression into the query.
+        @param args_list <list>: List of dictionaries (if bind) or lists (if positional) variables and their values for replacement.
+        @param args_ts   <list>: In kwargs - List of bind variables that must have their cursor input size set to timestamp. [NOT COMPATIBLE WITH POSITIONAL ARGUMENTS]
+        @param edit      <list>: List of direct string replacement parameters in positional order.
+        @param do_raise  <bool>: Boolean flag to suppress errors.
+        """
+        if self.client is None:
+            raise ValueError('Snowflake client is None')
+            return
+        try:
+            data = None
+            if isinstance(args, list):
+                if len(args) == 0:
+                    return
+                if isinstance(args[0], list):
+                    data = args
+                else:
+                    df = pd.DataFrame(args)
+            if isinstance(args, dict):
+                df = pd.DataFrame(args)
+            else:
+                df = args
+            if data is None:
+                for c in df.columns:
+                    try:
+                        df[c] = df[c].replace({np.nan: None})
+                    except TypeError:
+                        pass
+                    try:
+                        df[c] = df[c].replace({'None' : None})
+                        df[c] = df[c].replace({'nan' : None})
+                        df[c] = df[c].replace({'NaT' : None})
+                    except TypeError:
+                        pass
+                data = df.values.tolist()
+            if len(data) == 0:
+                return
+            rec0 = data[0]
+            tsidx = [1 if isinstance(v, pd.Timestamp) else 0 for v in rec0]
+            data1 = [] 
+
+            for rec in data:
+                data1.append([None if pd.isnull(v) else datetime(v.year, v.month, v.day, v.hour, v.minute, v.second) if tsidx[i] == 1 else v for i, v in enumerate(rec)])
+
+            cur = self.client.cursor()
+            cur.executemany(sql.format(*edit), data1)
+            cur.close()
+        except Exception as e1:
+            try:
+                sql = 'ALTER WAREHOUSE {} RESUME IF SUSPENDED'.format(self.info['warehouse'])
+                cur.execute(sql)
+                cur.executemany(sql.format(*edit), args)
+                cur.close()
+            except Exception as e2:
+                cur.close()
+                self._error_handler_(e1, False)
+                self._error_handler_(e2, do_raise)
+
+class Snowflake(SnowflakeConnection):
+
+    """
+    Quicker shorthand for constructing the connection object. Has unique string representations.
+    """
+    def __repr__(self):
+        return 'advancedanalytics_util.Snowflake(%r, %r)' % (self.info)
+
+class SF(SnowflakeConnection):
+
+    """
+    Quicker shorthand for constructing the connection object. Has unique string representations.
+    """
+    def __repr__(self):
+        return 'advancedanalytics_util.SF(%r, %r)' % (self.info)

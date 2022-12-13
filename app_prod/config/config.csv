@@ -1,0 +1,69 @@
+KEY,VALUE,TYPE
+application_name,'TORQUE Config',str
+perform_model_training,False,bool
+perform_model_inference,True,bool
+maxruntime_seconds,100000,int
+inference_info,"{'run_mode' : 'backfill',
+                 'backfill_start': '2020-05-03 00:00',
+                 'backfill_end': '2020-05-04 00:00',
+                 'backfill_date_format' : '%Y-%m-%d %H:%M',
+                 'inference_window' : 60,
+                 'datetime_index_column' : 'TS'
+                }",dict
+data_connection_info,"{
+                'connection_type' : 'file',
+                'path' : 'C:/Users/HoangLe/Desktop/Consilium_TORQUE_HOANG/app_prod/TORQUE/TAG_DATA',
+                'partition_mode' : None,
+                'file_prefix' : 'TRQ_TAG_DATA',
+                'file_suffix' : '.csv',}",dict
+data_connection_info_,"{'connection_type' : 's3',
+              'user'   : None,
+              'region' : 'ap-southeast-2',
+              'bucket' : 'aa-trq-model-1-task0370756-poc-syd-174396275689',
+              'path' : 'TORQUE/TAG_DATA',
+              'file_prefix' : 'TRQ_TAG_DATA',
+              'file_suffix' : '.csv',
+              'partition_mode' : None}",dict
+torque_info,"{
+            'features': ['TORQUE_MOTOR','TORQUE_ROD','SPEED_MOTOR','SPEED_ROD','FLOW_GAS'],
+            'fill_method': 'linear',
+            'datetime_index_column' : 'TS'
+          }",dict
+group_info,"{
+            'group_connection_info' : {'connection_type' : 'file', 
+			                           'path' : 'C:/Users/HoangLe/Desktop/Consilium_TORQUE_HOANG/app_prod/config',
+			                           'file' : 'MODEL_GROUP.csv', 
+			                           'partition_mode' : None},
+            'group_sql': 'SELECT * FROM MODEL_GROUP WHERE GROUP_ID = :GROUP_ID',
+            'group_kwargs':{'src_table': 'MODEL_GROUP', 
+			                 'file': 'MODEL_GROUP.csv', 
+			                 'args_ts': ['TSTART']},
+            'group_id': 0,
+           }",dict
+model_info,"{
+            'anomaly_detection_dict':{'missing_length':360},
+            'data_outage_detection_dict':{'start':1100, 'end':1440, 'missing_length':20, 
+                                          '12V_cut_off':12.0, '24V_cut_off':22.5},
+            'dawn_VOLTAGE_drop_detection_dict':{'onset_first_derivate':0.005, 'onset_second_derivative':0.002,
+                                                '12V_cut_off':12.0, '24V_cut_off':22.5,
+                                                'VOLTAGE_drop_gradient_threshold':-0.05},
+            'charging_fault_detection_dict':{'max_error_threshold':0.08, 
+                                             'mean_absolute_error_threshold':0.02,
+                                             'mean_squared_error_threshold':0.008,
+                                             'start':1000, 
+                                             'gradient_threshold':0.003},
+            'weather_detection_dict':{'end':400,'quantile':0.85,'weather_threshold':0.96,'window':30},
+            }",dict
+
+
+
+                
+                
+                
+
+
+
+                
+                
+                
+
