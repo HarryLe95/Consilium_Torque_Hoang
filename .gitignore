@@ -166,7 +166,6 @@ viz/
 *.png
 **.csv
 !**/config/*.csv
-!**/ROC/PROCESSED_DATA/*.csv
 #Private Info
 RDP.sh
 **rdp-key**
