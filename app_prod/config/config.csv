@@ -1,5 +1,4 @@
 KEY,VALUE,TYPE
-<<<<<<< HEAD
 application_name,'TORQUE Config',str
 perform_model_training,False,bool
 perform_model_inference,True,bool
@@ -18,10 +17,6 @@ data_connection_info,"{
                 'file_prefix' : 'TRQ_TAG_DATA',
                 'file_suffix' : '.csv',}",dict
 data_connection_info_,"{'connection_type' : 's3',
-=======
-application_name,'ROC Config',str
-cfg_s3_info,"{'connection_type' : 's3',
->>>>>>> 5a97d8fc5a28ec8663078b5c253462e9e0bdc3e0
               'user'   : None,
               'region' : 'ap-southeast-2',
               'bucket' : 'aa-trq-model-1-task0370756-poc-syd-174396275689',
