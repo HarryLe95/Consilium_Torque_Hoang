@@ -1,8 +1,6 @@
 import datetime 
-from typing import Sequence
 import logging 
 
-import numpy as np
 import pandas as pd
 from Model.TorqueModel import TorqueModel
 

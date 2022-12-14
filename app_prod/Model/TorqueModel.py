@@ -1,10 +1,7 @@
 import numpy as np
 import pandas as pd
 from tensorflow import keras
-import matplotlib.pyplot as plt
-from pathlib import Path
 from tqdm import tqdm
-from functools import cached_property
 import datetime 
 
 def get_ramping_alerts(data: pd.DataFrame,
