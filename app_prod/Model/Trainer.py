@@ -3,8 +3,9 @@ from Dataset.DataOperator import TorqueOperator
 from Model.ModelManager import ModelManager
 from utils.advancedanalytics_util import aauconnect_
 import datetime
+from functools import cached_property
 
-class HighTorque:
+class Trainer:
     def __init__(self,
                  group_config:dict,
                  inference_config:dict, 
@@ -20,12 +21,13 @@ class HighTorque:
             torque_config (dict): dictionary of roc config keywords
             model_config (dict): dictionary of model config keywords 
         """
-        
+        #Validate group keywords
         self._validate_group_config(group_config)
         self.group_config = group_config 
-        self._gp_info = self._get_group_info()
-        self.inference_wells = [d['WELL_CD'] for d in self._gp_info]
+        self.group_info = self.get_group_info()
+        self.inference_wells = [d['WELL_CD'] for d in self.group_info]
         
+        #Validate inference keywords
         self._validate_inference_config(inference_config)
         self.inference_config = inference_config
         self.run_mode = self.inference_config["run_mode"]
@@ -35,18 +37,26 @@ class HighTorque:
                 self.inference_config['backfill_end'] = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
             self.backfill_end = self.inference_config["backfill_end"]
         
+        #Validate data connection keywords
         self._validate_data_connection_config(data_connection_config)
         self.data_connection_config = data_connection_config
         
+        #Validate torque keywords
         self._validate_torque_config(torque_config)
         self.torque_config = torque_config 
         
+        #Validate model config
         self._validate_model_config(model_config)
         self.model_config = model_config 
         
-        self.data_operator = TorqueOperator(**self.data_connection_config, **self.torque_config)
-        self.data_manager = DataManager(wells= self.inference_wells,  data_operator=self.data_operator, **self.inference_config)
-        # self.model_manager = ModelManager(**self.model_config)
+        #Setup model and data manager
+        self.setup()
+        
+        
+    def setup(self)->None:
+        data_operator = TorqueOperator(**self.data_connection_config, **self.torque_config)
+        self.data_manager = DataManager(wells= self.inference_wells,  data_operator=data_operator, **self.inference_config)
+        self.model_manager = ModelManager(**self.model_config)
         
     def _validate_inference_config(self, config:dict)->None:
         assert("run_mode" in config), f"inference_info must contain keyword 'run_mode'"
@@ -88,9 +98,25 @@ class HighTorque:
         assert("group_id" in config), f"group_info must contain keyword 'group_id'"
     
     def _validate_model_config(self, config:dict)->None:
-        pass
-    
-    def _get_group_info(self) -> dict:
+        assert("model_path" in config), f"model_info must contain keyword 'model_path'"
+        assert("use_operation_status" in config), f"model_info must contain keyword 'use_operation_status'"
+        assert("use_flush_status" in config), f"model_info must contain keyword 'use_flush_status'"
+        assert("use_ramping_alert" in config), f"model_info must contain keyword 'use_ramping_alert'"
+        assert("use_torque_spike_alert" in config), f"model_info must contain keyword 'use_torque_spike_alert'"
+        assert("time_window" in config), f"model_info must contain keyword 'time_window'"
+        assert("off_threshold" in config), f"model_info must contain keyword 'off_threshold'"
+        assert("flush_diff_threshold" in config), f"model_info must contain keyword 'flush_diff_threshold'"
+        assert("flush_std_threshold" in config), f"model_info must contain keyword 'flush_std_threshold'"
+        assert("polynomial_days" in config), f"model_info must contain keyword 'polynomial_days'"
+        assert("polynomial_degree" in config), f"model_info must contain keyword 'polynomial_degree'"
+        assert("ramp_integral_threshold" in config), f"model_info must contain keyword 'ramp_integral_threshold'"
+        assert("window_size" in config), f"model_info must contain keyword 'window_size'"
+        assert("window_overlap" in config), f"model_info must contain keyword 'window_overlap'"
+        assert("binary_threshold" in config), f"model_info must contain keyword 'binary_threshold'"
+        assert("merged_event_overlap" in config), f"model_info must contain keyword 'merged_event_overlap'"
+        assert("minimum_event_length" in config), f"model_info must contain keyword 'minimum_event_length'"
+            
+    def get_group_info(self) -> dict:
         sql = self.group_config["group_sql"]
         args = {'GROUP_ID': self.group_config["group_id"]}
         kwargs = self.group_config["group_kwargs"]
@@ -99,15 +125,12 @@ class HighTorque:
 
     def run_model_training(self):
         pass
-    
-    def _get_model_training_data(self):
-        pass
-
-    def get_inference_dataset(self)->tuple[dict,dict]:
-        return self.data_manager.get_inference_dataset()
-    
-    def run_inference_(self, append:bool=False):
-        inference_dict = self.model_manager.run_inference(self.get_inference_dataset())
+                
+    def run_inference_(self, append:bool=False):      
+        inference_dataset = self.data_manager.get_inference_dataset()
+        completion_turndown_df = self.data_manager.get_completion_turndown_df()
+        label_df = self.data_manager.get_label_df()
+        inference_dict = self.model_manager.run_inference(inference_dataset,completion_turndown_df, label_df)
         self.data_manager.update_metadata(inference_dict, append)
         self.data_manager.update_event_log(inference_dict, append)       
     
@@ -133,23 +156,3 @@ class HighTorque:
                 append = True
                 start_time += datetime.timedelta(days=1)
 
-if __name__ == "__main__":
-    import config.__config__ as base_config
-    import pandas as pd 
-    config = base_config.init()
-    model = HighTorque(config['group_info'],
-                config['inference_info'],
-                config['data_connection_info'],
-                config['torque_info'],
-                config['model_info'])
-    data = model.get_inference_dataset()
-    completion_turndown_df = model.data_operator.read_completion_data()
-    label_df = model.data_operator.read_label_data()
-    from Model.TorqueModel import Model
-    inf_model = Model("C:/Users/HoangLe/Desktop/Consilium_TORQUE_HOANG/app_prod/Saved_Model/BRETT_Multi_Well_Model_v2.h5")
-    df = inf_model.alert_monitor_generation_all_wells("RM07-22-2", data[0]["RM07-22-2"],completion_turndown_df=completion_turndown_df, label_data_df=label_df)
-    sample_df = pd.read_csv("C:/Users/HoangLe/Desktop/Consilium_TORQUE_HOANG/app_prod/TORQUE/TAG_DATA/Output_df.csv")
-    
-    for i in df.columns:
-        print(i, df.loc[:,i].values[0], sample_df.loc[:,i].values[0])
-    print("END")

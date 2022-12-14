@@ -377,7 +377,6 @@ class DataOperator(PROCESSOR_MIXIN, FILENAMING_MIXIN):
             logger.error("Data connection uninitialised.")
             raise ValueError("Data connection uninitialised.")
     
-    #TESTED
     def read_data(self, well_cd:str, start:str|datetime.date, end:str|datetime.date, concat:bool=True, strp_format='%Y-%m-%d',strf_format:str='%Y%m%d') -> dict|pd.DataFrame:
         """Read well data from database 
         
@@ -440,7 +439,6 @@ class DataOperator(PROCESSOR_MIXIN, FILENAMING_MIXIN):
                 return None
         return response
     
-    #TESTED
     def read_metadata(self, well_cd:str) -> pd.DataFrame: 
         """Read meta data from database. Metadata file name is well_cd_ROC_PROCESSED_DATA_LAST.csv 
 

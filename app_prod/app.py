@@ -16,7 +16,7 @@ import random
 import utils.advancedanalytics_util as aau
 from utils.logging import get_logger
 from datetime import datetime
-from Model.HighTorque import HighTorque
+from Model.Trainer import Trainer
 
 logger = get_logger(__name__)
 
@@ -71,10 +71,10 @@ def main():
         state['alldatauptodate'] = True
         for group_id in groups:
             state['group_id'] = group_id
-            roc_model = HighTorque(config['group_info'],
+            roc_model = Trainer(config['group_info'],
                             config['inference_info'],
                             config['data_connection_info'],
-                            config['roc_info'],
+                            config['torque_info'],
                             config['model_info'])
             if config['perform_model_training']:
                 logger.info("Model training start")

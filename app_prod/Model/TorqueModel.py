@@ -7,7 +7,6 @@ from tqdm import tqdm
 from functools import cached_property
 import datetime 
 
-#MODDED
 def get_ramping_alerts(data: pd.DataFrame,
                        feature_name: str,
                        prediction_name: str,
@@ -41,7 +40,6 @@ def get_ramping_alerts(data: pd.DataFrame,
                     data.loc[time-pd.Timedelta('12hr'):time,[prediction_name]]=1
     return data
 
-#MODDED
 def get_torque_spike_decay_alert(data: pd.DataFrame,
                                  feature_name: str,
                                  prediction_name: str,
@@ -50,7 +48,7 @@ def get_torque_spike_decay_alert(data: pd.DataFrame,
                                  binary_threshold:float,
                                  model_path:str,
                                  merged_event_overlap: float,
-                                 miminum_event_length: int) -> pd.DataFrame:
+                                 minimum_event_length: int) -> pd.DataFrame:
     model = keras.models.load_model(model_path, compile=False)
 
     feature_data = data[feature_name].interpolate()
@@ -123,7 +121,7 @@ def get_torque_spike_decay_alert(data: pd.DataFrame,
     if event_datetimes:
         print(f"Number of events detected: {len(event_datetimes)}")
         if (len(event_datetimes) > 0):
-            mask = [((pd.to_datetime(event_datetime[1]) - pd.to_datetime(event_datetime[0])) > pd.Timedelta(minutes=miminum_event_length)) for event_datetime in event_datetimes]
+            mask = [((pd.to_datetime(event_datetime[1]) - pd.to_datetime(event_datetime[0])) > pd.Timedelta(minutes=minimum_event_length)) for event_datetime in event_datetimes]
             filtered_event_datetimes = [x for x, y in zip(event_datetimes, mask) if y == True]
 
             data[f"{prediction_name}_filtered"] = 0
@@ -144,7 +142,6 @@ def which_feature(data, feature_cols):
         vals.append(data[t].count())
     return feature_cols[np.argmax(vals)]
 
-#MODDED
 def get_operation_status(data: pd.DataFrame,
                          torque_feature: str,
                          off_threshold: float):
@@ -160,7 +157,6 @@ def get_operation_status(data: pd.DataFrame,
     data['operation_status'] = off_trace
     return data
 
-#MODDED
 def get_flush_status(data: pd.DataFrame,
                      speed_feature: str,
                      flush_diff_threshold:float,
@@ -188,7 +184,7 @@ def get_combined_alert(data: pd.DataFrame, alert_names: list, method: str = 'all
 
     return data
 
-def get_event_datetimes(event_data: pd.Series, merge_event_overlap: int = None):
+def get_event_datetimes(event_data: pd.Series, merge_event_overlap:float):
     """
     param data:
     param merge_event_overlap:
@@ -221,14 +217,14 @@ def get_event_datetimes(event_data: pd.Series, merge_event_overlap: int = None):
 
     return event_datetimes if len(event_datetimes) > 0 else None
 
-class Model:
+class TorqueModel:
     def __init__(self, 
                  model_path:str,
                  use_operation_status:bool=True,
                  use_flush_status:bool=True,
                  use_ramping_alert:bool=True,
                  use_torque_spike_alert:bool=True,
-                 time_window:str='1d',
+                 time_window:int=1,
                  off_threshold:float=10, 
                  flush_diff_threshold:float=4.9,
                  flush_std_threshold:float=4,
@@ -239,7 +235,7 @@ class Model:
                  window_overlap:float=0.5, 
                  binary_threshold:float=0.5,
                  merged_event_overlap: float=10,
-                 miminum_event_length: int=0):
+                 minimum_event_length: int=0):
         
         self.use_operation_status = use_operation_status
         self.use_flush_status = use_flush_status
@@ -260,98 +256,107 @@ class Model:
         self.binary_threshold = binary_threshold
         self.model_path = model_path
         self.merged_evant_overlap = merged_event_overlap
-        self.minimum_event_length = miminum_event_length
+        self.minimum_event_length = minimum_event_length
     
-    def get_rolling_average_torque(self, torque_column, data):
+    def get_rolling_average_torque(self, torque_column:str, data:pd.DataFrame)->pd.DataFrame:
         data[f"{torque_column}_roll_avg"] = data[torque_column].interpolate().rolling(120).mean()
         return data
         
-    
-    def get_operation_status(self, torque_column,data):
+    def get_operation_status(self, torque_column:str,data:pd.DataFrame)->pd.DataFrame:
         #OPERATION STATUS
         if self.use_operation_status:
             return get_operation_status(data, torque_column, self.off_threshold)
         return data
     
-    def get_flush_status(self, speed_column, data):
+    def get_flush_status(self, speed_column:str, data:pd.DataFrame)->pd.DataFrame:
         #FLUSH STATUS
         if self.use_flush_status:
             return get_flush_status(data, speed_column, self.flush_diff_threshold, self.flush_std_threshold)
         return data 
     
-    def get_ramping_alert(self, torque_column, data):
+    def get_ramping_alert(self, torque_column:str, data:pd.DataFrame)->pd.DataFrame:
         #RAMPING ALERT
         if self.use_ramping_alert:
             return get_ramping_alerts(data, torque_column, "ramping_alert", self.polynomial_days, self.polynomial_degree, self.ramp_integral_threshold)
         return data
     
-    def get_spike_alert(self, torque_column, data):
+    def get_spike_alert(self, torque_column:str, data:pd.DataFrame)->pd.DataFrame:
         if self.use_torque_spike_alert:
             return get_torque_spike_decay_alert(data, torque_column, "torque_spike_decay_alert", self.window_size, self.window_overlap, self.binary_threshold, self.model_path, self.merged_evant_overlap, self.minimum_event_length)
         return data
     
-    def get_combined_alert(self, data:pd.DataFrame):
+    def get_combined_alert(self, data:pd.DataFrame)->pd.DataFrame:
         data['operation_status'] = 1 - data['operation_status']
         data['flush_status'] = 1 - data['flush_status'] 
         data = get_combined_alert(data, alert_names=['torque_spike_decay_alert', 'flush_status','operation_status'])        
         return data
     
     def get_alert_count_resampling(self, data:pd.DataFrame, alert_type:str, period:str)->pd.Series:
+        """Resample over input period on input the alert type column of input data and count number of positives
+        
+        Use case: if alert data is minutely in binary format, calling this method over a period of one hour will
+        count the number of alerts that occur in a 1 hour window
+
+        Args:
+            data (pd.DataFrame): input dataframe
+            alert_type (str): column with alert information
+            period (str): resampling period
+
+        Returns:
+            pd.Series: alert count series 
+        """
         return data[alert_type].resample(period).sum()
     
-    def has_alert(self, data:pd.Series, window_start:datetime.datetime, window_end:datetime.datetime)->int:
+    def has_alert(self, data:pd.Series, window_start:datetime.datetime, window_end:datetime.datetime)->bool:
+        """Check if there are at least one alert over a window for a given data
+
+        Args:
+            data (pd.Series): input data
+            window_start (datetime.datetime): start of window
+            window_end (datetime.datetime): end of window
+
+        Returns:
+            bool: whether number of events in the window is positive
+        """
         return data[window_start:window_end].sum()>0
     
     def count_alert(self, data:pd.Series, window_start:datetime.datetime, window_end:datetime.datetime)->int:
+        """Count the number of alerts for input data inbetween given time window
+
+        Args:
+            data (pd.Series): input data
+            window_start (datetime.datetime): start of input window
+            window_end (datetime.datetime): end of input window
+
+        Returns:
+            int: number of events in the window 
+        """
         return data[window_start:window_end].sum()
     
-    def alert_monitor_generation_all_wells(self,
-                                           well_cd: str, 
-                                           data:pd.DataFrame,
-                                           completion_turndown_df: pd.DataFrame,
-                                           label_data_df: pd.DataFrame) -> pd.DataFrame:
+    def run_well_inference(self,well_cd: str, data:pd.DataFrame,completion_turndown_df: pd.DataFrame,label_data_df: pd.DataFrame) -> dict:
+        """Run inference to get all labels
 
+        Args:
+            well_cd (str): well id 
+            data (pd.DataFrame): inference data
+            completion_turndown_df (pd.DataFrame): completion data
+            label_data_df (pd.DataFrame): label data
+
+        Returns:
+            dict: all output tags 
+        """
+        #Get all timewindows
         start_date  = data.index.min()
         end_date    = data.index.max()
         week_window_start = pd.to_datetime(end_date)-pd.Timedelta(days=7)
         two_month_window_start = pd.to_datetime(end_date)-pd.Timedelta(days=60)
         month_window_start = pd.to_datetime(end_date)-pd.Timedelta(days=30)
-        time_window_start = pd.to_datetime(end_date)-pd.Timedelta(self.time_window)
+        time_window_start = pd.to_datetime(end_date)-pd.Timedelta(days=self.time_window)
         time_window_end   = end_date
         week_window_end   = end_date
         month_window_end  = end_date
         two_month_window_end = end_date
-        
-        inf_result=pd.DataFrame(index=[well_cd],
-                                       columns=[f'Spiking Present (past {self.time_window}ay/s)',f'Ramping Present (past {self.time_window}ay/s)',
-                                                'Spiking Present (past month)',
-                                                'Ramping Present (past month)',                                             
-                                                f'Spike Alert Percent Active Time in Past {self.time_window}ay/s',
-                                                'Spike Alert Percent Active Time in Past Week',
-                                                'Spike Alert Percent Active Time in Past 30 Days',
-                                                'Spike Alert Percent Active Time in Past 60 Days',
-                                                f'Ramp Alert Percent Active Time in Past {self.time_window}ay/s',
-                                                'Ramp Alert Percent Active Time in Past Week',
-                                                'Ramp Alert Percent Active Time in Past 30 Days',
-                                                'Ramp Alert Percent Active Time in Past 60 Days',
-                                                'Average gas flow (60 Days)',
-                                                'TD status',
-                                                'Design',
-                                                'Pump age',
-                                                'Days since last flush',
-                                                'Days since last failure',
-                                                f'Total Alert on minutes in Past {self.time_window}ay/s',
-                                                'Total Alert on minutes in Past Week',
-                                                'Total Alert on minutes in Past 30 Days',
-                                                'Total Alert on minutes in Past 60 Days',
-                                                f'Spike Alert on minutes in Past {self.time_window}ay/s',
-                                                'Spike Alert on minutes in Past Week',
-                                                'Spike Alert on minutes in Past 30 Days',
-                                                'Spike Alert on minutes in Past 60 Days',
-                                                f'Ramp Alert on minutes in Past {self.time_window}ay/s',
-                                                'Ramp Alert on minutes in Past Week',
-                                                'Ramp Alert on minutes in Past 30 Days',
-                                                'Ramp Alert on minutes in Past 60 Days',])
+        inf_result= {} 
         
         torque_names = ["TORQUE_MOTOR", "TORQUE_ROD"]
         torque_col = which_feature(data, torque_names)
@@ -375,43 +380,63 @@ class Model:
         ramp_label_hour = self.get_alert_count_resampling(data, "ramping_alert", "1h")
         total_label_hour = peak_label_hour + ramp_label_hour
         
-        inf_result[f'Spiking Present (past {self.time_window}ay/s)']         = self.has_alert(peak_label_hour, time_window_start, time_window_end)
-        inf_result[f'Ramping Present (past {self.time_window}ay/s)']         = self.has_alert(ramp_label_hour, time_window_start, time_window_end)
-        inf_result['Spiking Present (past month)']                           = self.has_alert(peak_label_hour, month_window_start, month_window_end)
-        inf_result['Ramping Present (past month)']                           = self.has_alert(ramp_label_hour, month_window_start, month_window_end)
+        inf_result['WELL_CD'] = well_cd
+        inf_result['TS'] = end_date.strftime("%Y-%m-%d %H:%M")
         
-        inf_result[f'Total Alert on minutes in Past {self.time_window}ay/s'] = self.count_alert(total_label_hour, time_window_start, time_window_end)
-        inf_result['Total Alert on minutes in Past Week']                    = self.count_alert(total_label_hour, week_window_start, week_window_end)
-        inf_result['Total Alert on minutes in Past 30 Days']                 = self.count_alert(total_label_hour, month_window_start, month_window_end)
-        inf_result['Total Alert on minutes in Past 60 Days']                 = self.count_alert(total_label_hour, two_month_window_start, two_month_window_end)
+        inf_result[f'SPIKE_STATUS_{self.time_window}DAY'] = self.has_alert(peak_label_hour, time_window_start, time_window_end)
+        inf_result[f'RAMP_STATUS_{self.time_window}DAY']  = self.has_alert(ramp_label_hour, time_window_start, time_window_end)
+        inf_result['SPIKE_STATUS_30DAY']                  = self.has_alert(peak_label_hour, month_window_start, month_window_end)
+        inf_result['RAMP_STATUS_30DAY']                   = self.has_alert(ramp_label_hour, month_window_start, month_window_end)
         
-        inf_result[f'Spike Alert on minutes in Past {self.time_window}ay/s'] = self.count_alert(peak_label_hour, time_window_start, time_window_end)
-        inf_result['Spike Alert on minutes in Past Week']                    = self.count_alert(peak_label_hour, week_window_start, week_window_end)
-        inf_result['Spike Alert on minutes in Past 30 Days']                 = self.count_alert(peak_label_hour, month_window_start, month_window_end)
-        inf_result['Spike Alert on minutes in Past 60 Days']                 = self.count_alert(peak_label_hour, two_month_window_start, two_month_window_end)
+        inf_result[f'TOTAL_ALERT_MINS_{self.time_window}DAY']  = self.count_alert(total_label_hour, time_window_start, time_window_end)
+        inf_result['TOTAL_ALERT_MINS_7DAY']                    = self.count_alert(total_label_hour, week_window_start, week_window_end)
+        inf_result['TOTAL_ALERT_MINS_30DAY']                   = self.count_alert(total_label_hour, month_window_start, month_window_end)
+        inf_result['TOTAL_ALERT_MINS_60DAY']                   = self.count_alert(total_label_hour, two_month_window_start, two_month_window_end)
         
-        inf_result[f'Ramp Alert on minutes in Past {self.time_window}ay/s']  = self.count_alert(ramp_label_hour, time_window_start, time_window_end) 
-        inf_result['Ramp Alert on minutes in Past Week']                     = self.count_alert(ramp_label_hour, week_window_start, week_window_end)
-        inf_result['Ramp Alert on minutes in Past 30 Days']                  = self.count_alert(ramp_label_hour, month_window_start, month_window_end)
-        inf_result['Ramp Alert on minutes in Past 60 Days']                  = self.count_alert(ramp_label_hour, two_month_window_start, two_month_window_end)
+        inf_result[f'SPIKE_ALERT_MINS_{self.time_window}DAY']  = self.count_alert(peak_label_hour, time_window_start, time_window_end)
+        inf_result['SPIKE_ALERT_MINS_7DAY']                    = self.count_alert(peak_label_hour, week_window_start, week_window_end)
+        inf_result['SPIKE_ALERT_MINS_30DAY']                   = self.count_alert(peak_label_hour, month_window_start, month_window_end)
+        inf_result['SPIKE_ALERT_MINS_60DAY']                   = self.count_alert(peak_label_hour, two_month_window_start, two_month_window_end)
         
-        inf_result['Average gas flow (60 Days)'] = data.loc[start_date:end_date,["FLOW_GAS"]].interpolate("ffill").mean().values[0]
-        inf_result['TD status'] = completion_turndown_df[completion_turndown_df['WellCD']==well_cd]['Turndown Cat.'].values[0]
-        inf_result['Design'] = completion_turndown_df[completion_turndown_df['WellCD']==well_cd]['Completion Design'].values[0]
-        inf_result['Pump age'] = end_date -label_data_df[(label_data_df['WellCD']==well_cd) & (label_data_df.index < end_date)&(label_data_df['Event']=='Pump Change')].index.max()
-        inf_result['Days since last flush'] = end_date-label_data_df[(label_data_df['WellCD']==well_cd) & (label_data_df.index < end_date)&((label_data_df['Event']=='Scheduled')|(label_data_df['Event']=='Reactive')|(label_data_df['Event']=='Flushby'))].index.max()
-        inf_result['Days since last failure'] = end_date-label_data_df[(label_data_df['WellCD']==well_cd) & (label_data_df.index < end_date) & (label_data_df['Failure Mode'].notnull())].index.max()
+        inf_result[f'RAMP_ALERT_MINS_{self.time_window}DAY']  = self.count_alert(ramp_label_hour, time_window_start, time_window_end) 
+        inf_result['RAMP_ALERT_MINS_7DAY']                     = self.count_alert(ramp_label_hour, week_window_start, week_window_end)
+        inf_result['RAMP_ALERT_MINS_30DAY']                  = self.count_alert(ramp_label_hour, month_window_start, month_window_end)
+        inf_result['RAMP_ALERT_MINS_60DAY']                  = self.count_alert(ramp_label_hour, two_month_window_start, two_month_window_end)
         
-        inf_result[f'Spike Alert Percent Active Time in Past {self.time_window}ay/s']=(inf_result.loc[well_cd,[f'Spike Alert on minutes in Past {self.time_window}ay/s']].values[0]/(pd.Timedelta(self.time_window).total_seconds() / 60))*100
-        inf_result['Spike Alert Percent Active Time in Past Week']=(inf_result.loc[well_cd,['Spike Alert on minutes in Past Week']].values[0] / 10080)*100
-        inf_result['Spike Alert Percent Active Time in Past 30 Days']=(inf_result.loc[well_cd,['Spike Alert on minutes in Past 30 Days']].values[0]/43200)*100
-        inf_result['Spike Alert Percent Active Time in Past 60 Days']=(inf_result.loc[well_cd,['Spike Alert on minutes in Past 60 Days']].values[0]/86400)*100
+        inf_result['GAS_FLOW_AVG_60DAY'] = data.loc[start_date:end_date,["FLOW_GAS"]].interpolate("ffill").mean().values[0]
+        inf_result['TURN_DOWN_CATEGORY'] = completion_turndown_df[completion_turndown_df['WellCD']==well_cd]['Turndown Cat.'].values[0]
+        inf_result['WELL_DESIGN']        = completion_turndown_df[completion_turndown_df['WellCD']==well_cd]['Completion Design'].values[0]
+        
+        inf_result['PUMP_RUN_LIFE_HOURS'] = (end_date -label_data_df[(label_data_df['WellCD']==well_cd) & (label_data_df.index < end_date)&(label_data_df['Event']=='Pump Change')].index.max()).total_seconds()/3600
+        inf_result['LAST_FLUSH_TS'] = label_data_df[(label_data_df['WellCD']==well_cd) & (label_data_df.index < end_date)&((label_data_df['Event']=='Scheduled')|(label_data_df['Event']=='Reactive')|(label_data_df['Event']=='Flushby'))].index.max()
+        inf_result['LAST_FAIL_TS'] = label_data_df[(label_data_df['WellCD']==well_cd) & (label_data_df.index < end_date) & (label_data_df['Failure Mode'].notnull())].index.max()
+        inf_result['LAST_EVENT_TS'] = label_data_df[(label_data_df['WellCD']==well_cd) & (label_data_df.index < end_date)].index.max()
+   
+        inf_result[f'SPIKE_PERCENT_{self.time_window}DAY']=(inf_result[f'SPIKE_ALERT_MINS_{self.time_window}DAY']/(pd.Timedelta(days=self.time_window).total_seconds() / 60))*100
+        inf_result['SPIKE_PERCENT_7DAY'] =(inf_result['SPIKE_ALERT_MINS_7DAY']/ 10080)*100
+        inf_result['SPIKE_PERCENT_30DAY']=(inf_result['SPIKE_ALERT_MINS_30DAY']/43200)*100
+        inf_result['SPIKE_PERCENT_60DAY']=(inf_result['SPIKE_ALERT_MINS_60DAY']/86400)*100
                         
-        inf_result[f'Ramp Alert Percent Active Time in Past {self.time_window}ay/s']=(inf_result.loc[well_cd,[f'Ramp Alert on minutes in Past {self.time_window}ay/s']].values[0]/(pd.Timedelta(self.time_window).total_seconds() / 60))*100
-        inf_result['Ramp Alert Percent Active Time in Past Week']=(inf_result.loc[well_cd,['Ramp Alert on minutes in Past Week']].values[0] / 10080)*100
-        inf_result['Ramp Alert Percent Active Time in Past 30 Days']=(inf_result.loc[well_cd,['Ramp Alert on minutes in Past 30 Days']].values[0]/43200)*100
-        inf_result['Ramp Alert Percent Active Time in Past 60 Days']=(inf_result.loc[well_cd,['Ramp Alert on minutes in Past 60 Days']].values[0]/86400)*100
-                    
+        inf_result[f'RAMP_PERCENT_{self.time_window}DAY']=(inf_result[f'RAMP_ALERT_MINS_{self.time_window}DAY']/(pd.Timedelta(days=self.time_window).total_seconds() / 60))*100
+        inf_result['RAMP_PERCENT_7DAY']=(inf_result['RAMP_ALERT_MINS_7DAY'] / 10080)*100
+        inf_result['RAMP_PERCENT_30DAY']=(inf_result['RAMP_ALERT_MINS_30DAY']/43200)*100
+        inf_result['RAMP_PERCENT_60DAY']=(inf_result['RAMP_ALERT_MINS_60DAY']/86400)*100
+        
+        inf_result["WELL_VALUE"] = ""
+        inf_result["NEXT_SCHEDULED_FLUSH"]=""
+        inf_result["SEVERITY"] = ""                    
+        #Heuristic for priority
+        inf_result["PRIORITY"] = np.round(inf_result[f"SPIKE_PERCENT_7DAY"])                   
+        inf_result["PREDICTED_FAILURE_TYPE"] = ""      
+        inf_result["RECOMMENDED_ACTION"] = ""          
+        inf_result["QC_USER_REVIEW_SEVERITY"] = ""     
+        inf_result["QC_USER_REVIEW_PRIORITY"] = ""     
+        inf_result["QC_USER_REVIEW_STATUS"] = ""       
+        inf_result["QC_USER_REVIEW_FAILURE_TYPE"] = "" 
+        inf_result["QC_USER_REVIEW_ACTION"] = ""       
+        inf_result["LAST_QC_BY"] = ""                  
+        inf_result["LAST_QC_TS"] = ""                  
+        inf_result["QC_USER_REVIEW_COMMENT"] = ""     
 
-        return inf_result.sort_values(by=f'Total Alert on minutes in Past {self.time_window}ay/s',ascending=False)
+        return inf_result
 

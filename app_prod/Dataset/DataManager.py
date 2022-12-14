@@ -5,7 +5,7 @@ import logging
 import pandas as pd 
 import numpy as np 
 
-from Dataset.DataOperator import DataOperator
+from Dataset.DataOperator import TorqueOperator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -15,7 +15,7 @@ class DataManager:
                  wells:Sequence[str], 
                  run_mode:str,
                  backfill_start:str,
-                 data_operator:DataOperator,
+                 data_operator:TorqueOperator,
                  inference_window:int=60,
                  datetime_index_column:str="TS",
                  **kwargs,
@@ -65,7 +65,6 @@ class DataManager:
                 logger.error(f"Error getting backfill mode metadata. Error Message: {e}")
                 raise e 
     
-    #TODO update this later 
     def update_metadata(self, inference_output:dict, append:bool=True) -> None: 
         """Update metadata based on inference output
 
@@ -136,6 +135,22 @@ class DataManager:
             else:
                 inference_dataset[well] = None
         return inference_dataset, metadata_dataset
+
+    def get_label_df(self)->pd.DataFrame:
+        """TORQUE Project specific: manual annotation data
+
+        Returns:
+            pd.DataFrame: label dataframe
+        """
+        return self.data_operator.read_label_data()
+    
+    def get_completion_turndown_df(self)->pd.DataFrame:
+        """TORQUE Project specific: completion turndown df
+
+        Returns:
+            pd.DataFrame: completion dataframe
+        """
+        return self.data_operator.read_completion_data()
 
     #TODO 
     def get_training_dataset(self) -> dict[str, np.ndarray]:
