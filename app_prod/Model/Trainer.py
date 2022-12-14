@@ -3,7 +3,6 @@ from Dataset.DataOperator import TorqueOperator
 from Model.ModelManager import ModelManager
 from utils.advancedanalytics_util import aauconnect_
 import datetime
-from functools import cached_property
 
 class Trainer:
     def __init__(self,
