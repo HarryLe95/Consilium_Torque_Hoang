@@ -423,7 +423,7 @@ class TorqueModel:
         inf_result["NEXT_SCHEDULED_FLUSH"]=""
         inf_result["SEVERITY"] = ""                    
         #Heuristic for priority
-        inf_result["PRIORITY"] = np.round(inf_result[f"SPIKE_PERCENT_7DAY"])                   
+        inf_result["PRIORITY"] = inf_result[f"SPIKE_PERCENT_7DAY"]
         inf_result["PREDICTED_FAILURE_TYPE"] = ""      
         inf_result["RECOMMENDED_ACTION"] = ""          
         inf_result["QC_USER_REVIEW_SEVERITY"] = ""     
