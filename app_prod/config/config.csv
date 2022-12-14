@@ -23,7 +23,6 @@ data_connection_info_,"{'connection_type' : 's3',
               'path' : 'TORQUE/TAG_DATA',
               'file_prefix' : 'TRQ_TAG_DATA',
               'file_suffix' : '.csv',
-<<<<<<< HEAD
               'partition_mode' : None}",dict
 torque_info,"{
             'features': ['TORQUE_MOTOR','TORQUE_ROD','SPEED_MOTOR','SPEED_ROD','FLOW_GAS'],
@@ -63,15 +62,6 @@ model_info,"{
                 
 
 
-=======
-              'parition_mode' : None}",dict
-cfg_file_info,"{'connection_type' : 'file',
-                'path' : 'C:/Users/HoangLe/app_prod/roc',
-                'partition_mode' : None,
-                'file_prefix' : 'TRQ_TAG_DATA',
-                'file_suffix' : '.csv',
-                'parition_mode' : None}",dict
->>>>>>> 5a97d8fc5a28ec8663078b5c253462e9e0bdc3e0
 
                 
                 
