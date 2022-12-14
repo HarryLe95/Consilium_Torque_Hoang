@@ -150,4 +150,6 @@ if __name__ == "__main__":
     df = inf_model.alert_monitor_generation_all_wells("RM07-22-2", data[0]["RM07-22-2"],completion_turndown_df=completion_turndown_df, label_data_df=label_df)
     sample_df = pd.read_csv("C:/Users/HoangLe/Desktop/Consilium_TORQUE_HOANG/app_prod/TORQUE/TAG_DATA/Output_df.csv")
     
+    for i in df.columns:
+        print(i, df.loc[:,i].values[0], sample_df.loc[:,i].values[0])
     print("END")
