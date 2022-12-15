@@ -19,14 +19,12 @@ def main():
     
     #Notification DataFrame
     notification_df = data_manager.combine_event_log()
-    
-    #Send notification email
-    
+        
     notification_file_name = "TRQ_INFERENCE_LAST.csv"
-    kwargs = {'file':notification_file_name, 'path':config['data_connection_info']['path'], 'partition_mode': None}
+    kwargs = {'file':notification_file_name, 'path':config['data_connection_info']['path'], 'partition_mode': None, "append":False}
     logger.debug("Writting aggregated event log to database")
     logger.debug(f"Aggregated event log info - connection: {config['data_connection_info']['connection_type']}; path: {kwargs['path']}; name: {kwargs['file']}")
-    connection.write(args=notification_df, edit=[], orient="df",**kwargs)
+    connection.write_many(args=notification_df, edit=[], orient="df",**kwargs)
     logger.debug("Aggregating event logs completed")
     
 if __name__ == "__main__":
