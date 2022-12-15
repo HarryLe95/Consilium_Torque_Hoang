@@ -8,10 +8,19 @@ Standard application entry point for SandboxProductionLoop (SPL) architecture
 
 NOTE: Santos standards mandate NO HARD-CODING of credentials in any source code.
 """
+import os
+os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ["SM_FRAMEWORK"] = "tf.keras"
+import tensorflow as tf
+tf.get_logger().setLevel('INFO')
+
 import argparse
 import config.__config__ as base_config
 import config.__state__ as base_state
-import os
+
 import random
 import utils.advancedanalytics_util as aau
 from utils.logging import get_logger
@@ -42,11 +51,7 @@ def main():
     state = base_state.init()
 
     # Environment variables
-    os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-    os.environ["SM_FRAMEWORK"] = "tf.keras"
+    
 
     # play around without the seed value
     random.seed(22)

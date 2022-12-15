@@ -10,6 +10,10 @@ from Dataset.DataOperator import TorqueOperator
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+def concat_no_exception(dfs:Sequence[pd.DataFrame|None],axis=0)->pd.DataFrame:
+    all_df = [df for df in dfs if df is not None]
+    return pd.concat(all_df,axis=axis)
+
 class DataManager: 
     def __init__(self,
                  wells:Sequence[str], 
@@ -88,17 +92,43 @@ class DataManager:
             output= pd.DataFrame({'status':status, 'message': message, 'start_time': start_time, 'end_time': end_time, 'tzinfo':tzinfo, 
                                   'inf_first_TS':inf_first_TS, 'inf_last_TS': inf_last_TS, self.datetime_index_column:next_date}, index = [0])
             if append:
-                output = pd.concat([self.metadata[well],output],axis=0)
+                output = concat_no_exception([self.metadata[well],output],axis=0)
             self.metadata[well] = output
             self.data_operator.write_metadata(output, well)
-            
+    
+    def get_event_log(self)->dict[str,pd.DataFrame]:
+        try:
+            logger.debug("Getting event log")
+            return {well:self.data_operator.read_event_log(well) for well in self.wells}
+        except Exception as e: 
+            logger.error(f"Error getting event log from database. Error message: {e}")
+            raise e 
+    
     def update_event_log(self, inference_output:dict, append:bool) -> None:
         for well in inference_output:
             status = inference_output[well]['inference_status']
             body = inference_output[well]['body']
             if status == 0:
                 output = pd.DataFrame(body, index=[0])
-                self.data_operator.write_event_log(output, well, append)
+                if append: #Append to event log logic
+                    historical_log = self.data_operator.read_event_log(well)
+                    output = concat_no_exception([historical_log, output], axis = 0)
+                self.data_operator.write_event_log(output, well)
+    
+    def combine_event_log(self)->pd.DataFrame:
+        event_log_dict ={well:self.data_operator.read_event_log(well).iloc[[-1],:] for well in self.wells} 
+        metadata_dict = {well:self.data_operator.read_metadata(well).iloc[-1,:] for well in self.wells}
+        all_data = []
+        for well in self.wells:
+            if metadata_dict[well]["status"] == 0:
+                all_data.append(event_log_dict[well])
+        notification_df = concat_no_exception(all_data,axis=0)
+        return self.post_process_event_log(notification_df)
+    
+    def post_process_event_log(self, event_log:pd.DataFrame)->pd.DataFrame:
+        event_log = event_log.sort_values(by=["SPIKE_PERCENT_7DAY"], ascending = [False])
+        event_log["PRIORITY"] = len(event_log) - np.arange(len(event_log))
+        return event_log
     
     def get_inference_day_dataset_(self, well:str) -> tuple[datetime.date,pd.DataFrame]|None:
         """Get data for the inference day. Inference day is the last day (day in the last row) of the corresponding metadata

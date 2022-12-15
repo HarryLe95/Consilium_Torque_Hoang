@@ -508,24 +508,18 @@ class DataOperator(PROCESSOR_MIXIN, FILENAMING_MIXIN):
             logger.error(f"Error getting event log data for well: {well_cd}. Error message: {e}")
             raise e  
         
-    def write_event_log(self, event_output:pd.DataFrame, well_cd:str, append:bool)->None:
+    def write_event_log(self, event_output:pd.DataFrame, well_cd:str)->None:
         logger.debug(f"Updating event log for well: {well_cd}")
         kwargs = deepcopy(self.kwargs)
         kwargs['append']=False
-        file_name = self.get_event_log_name(well_cd, self.file_prefix, self.file_suffix)
-        
-        if append: #Append to event log logic
-            historical_log = self.read_event_log(well_cd)
-            if historical_log is not None:
-                event_output = pd.concat([historical_log, event_output], axis = 0)
-                
+        file_name = self.get_event_log_name(well_cd, self.file_prefix, self.file_suffix)        
         kwargs['file']=file_name
         try:
             self.connection.write_many(sql=None, args=event_output, **kwargs)
         except Exception as e: 
             logger.error(f"Error writing event log")
             raise e 
-        
+    
     def process_data(self, data:pd.DataFrame) -> pd.DataFrame:
         """Apply transformations to input data
 

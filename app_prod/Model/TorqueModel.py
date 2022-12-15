@@ -108,7 +108,7 @@ def get_torque_spike_decay_alert(data: pd.DataFrame,
         df.loc[dt_s_idx:dt_e_idx, f"{prediction_name}_tmp"] = prediction[s_pred_idx:e_pred_idx]
         df.loc[dt_s_idx:dt_e_idx, prediction_name] = df.loc[dt_s_idx:dt_e_idx].max(axis=1)
 
-    data[prediction_name] = (df[prediction_name].values > binary_threshold) * 1
+    data[prediction_name] = (df[prediction_name].values > binary_threshold).astype(int)
     
     # filter datetimes
     event_datetimes = get_event_datetimes(data[prediction_name],
@@ -123,7 +123,7 @@ def get_torque_spike_decay_alert(data: pd.DataFrame,
 
             data[f"{prediction_name}_filtered"] = 0
             for (start_datetime, end_datetime) in filtered_event_datetimes:
-                data[f"{prediction_name}_filtered"].loc[start_datetime:end_datetime] = 1
+                data.loc[start_datetime:end_datetime,f"{prediction_name}_filtered"] = 1
 
             data[prediction_name] = data[f"{prediction_name}_filtered"]
             data = data.drop(columns=[f"{prediction_name}_filtered"])
