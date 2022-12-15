@@ -1,4 +1,4 @@
-from tensorflow.keras import backend as K
+from keras import backend as K
 
 
 # loss and metric suitable to the "segmentation" strategy for the targets/prediction
@@ -58,17 +58,3 @@ def metric_recall_1D(y_true, y_pred):
     Recall = (total_class_intersection + smooth) / (total_class_sum  + smooth)
     return Recall
 
-class LRScheduler:
-    def __init__(self, init_lr:float, first_epoch_drop:int, second_epoch_drop:int):
-        self.init_lr = init_lr
-        self.first_epoch_drop = first_epoch_drop
-        self.second_epoch_drop = second_epoch_drop
-    
-    # learning rate schedule
-    def lr_schedule(self, epoch):
-        lr = self.init_lr
-        if epoch >= self.first_epoch_drop:
-            lr *= 1e-1     
-        if epoch >= self.second_epoch_drop:
-            lr *= 1e-1    
-        return lr

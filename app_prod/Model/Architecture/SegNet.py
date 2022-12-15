@@ -1,8 +1,7 @@
-import tensorflow
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Conv1D, BatchNormalization, Activation
-from tensorflow.keras.layers import AveragePooling1D, Input, Lambda, concatenate, MaxPooling1D, UpSampling1D
-from tensorflow.keras.regularizers import l2
+from keras.models import Model
+from keras.layers import Conv1D, BatchNormalization, Activation
+from keras.layers import Input, concatenate, MaxPooling1D, UpSampling1D
+from keras.regularizers import l2
 
 
 class Models:

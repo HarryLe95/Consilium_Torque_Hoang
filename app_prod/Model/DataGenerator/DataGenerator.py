@@ -3,12 +3,13 @@ import pandas as pd
 import random
 from random import randrange 
 import numpy as np 
-from tensorflow.keras.callbacks import LearningRateScheduler, History
-from tensorflow.keras import backend as K
+import keras 
+from keras.callbacks import LearningRateScheduler, History
+from keras import backend as K
 from typing import Tuple 
 
 
-class data_generator(tensorflow.keras.utils.Sequence):
+class data_generator(keras.utils.Sequence):
     def __init__(self, X_all, Y_all, well_id_all, num_classes, batch_size, window_size = None, is_validation=False):
         self.len = 128
         self.X_all = X_all
