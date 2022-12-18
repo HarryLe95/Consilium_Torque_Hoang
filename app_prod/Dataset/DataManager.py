@@ -77,20 +77,18 @@ class DataManager:
             append (bool): whether to append the new metadata information or to overwrite. Defaults to True
         """
         for well in inference_output: 
-            status = inference_output[well]['inference_status']
-            message = inference_output[well]['message']
-            start_time = inference_output[well]['start_time']
-            end_time = inference_output[well]['end_time']
-            tzinfo = inference_output[well]['tzinfo']
-            inf_first_TS = inference_output[well]['inference_first_TS']
-            inf_last_TS = inference_output[well]['inference_last_TS']
+            status = inference_output[well]['STATUS']
+            start_time = inference_output[well]['START_TS']
+            end_time = inference_output[well]['END_TS']
+            inf_first_TS = inference_output[well]['FIRST_TS']
+            inf_last_TS = inference_output[well]['LAST_TS']
             if status == 0: 
                 next_date = datetime.strptime(inf_first_TS,"%Y-%m-%d %H:%M") + timedelta(days=1)
                 next_date = next_date.strftime("%Y-%m-%d %H:%M")
             else:
                 next_date = inf_first_TS    
-            output= pd.DataFrame({'status':status, 'message': message, 'start_time': start_time, 'end_time': end_time, 'tzinfo':tzinfo, 
-                                  'inf_first_TS':inf_first_TS, 'inf_last_TS': inf_last_TS, self.datetime_index_column:next_date}, index = [0])
+            output= pd.DataFrame({'STATUS':status, 'START_TS': start_time, 'END_TS': end_time,  
+                                  'FIRST_TS':inf_first_TS, 'LAST_TS': inf_last_TS, self.datetime_index_column:next_date}, index = [0])
             if append:
                 output = concat_no_exception([self.metadata[well],output],axis=0)
             self.metadata[well] = output
@@ -106,8 +104,8 @@ class DataManager:
     
     def update_event_log(self, inference_output:dict, append:bool) -> None:
         for well in inference_output:
-            status = inference_output[well]['inference_status']
-            body = inference_output[well]['body']
+            status = inference_output[well]['STATUS']
+            body = inference_output[well]['BODY']
             if status == 0:
                 output = pd.DataFrame(body, index=[0])
                 if append: #Append to event log logic

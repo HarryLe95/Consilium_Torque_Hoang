@@ -53,7 +53,7 @@ class ModelManager:
             logger.error(f"Errors encountered when running inference. Exception encountered: {exception_message}")            
             status = 1
         end_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        return {"inference_status":status, "body": response, "message": exception_message, "start_time": start_time, "end_time": end_time, 
-                "tzinfo": self.LOCAL_TIMEZONE, "inference_first_TS": inference_metadata[0].strftime("%Y-%m-%d %H:%M"),
-                "inference_last_TS": inference_metadata[1].strftime("%Y-%m-%d %H:%M")} 
+        return {"STATUS":status, "BODY": response, "START_TS": start_time, "END_TS": end_time, 
+                "FIRST_TS": inference_metadata[0].strftime("%Y-%m-%d %H:%M"),
+                "LAST_TS": inference_metadata[1].strftime("%Y-%m-%d %H:%M")} 
         
